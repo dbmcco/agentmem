@@ -4,13 +4,7 @@
 
 __version__ = "0.1.0"
 
-from agentmem.core.models import (
-    Evidence,
-    EvidenceKind,
-    Facet,
-    RetrievalQuery,
-    RetrievalResult,
-)
+from agentmem.core.models import Evidence, EvidenceKind, Facet, RetrievalQuery, RetrievalResult
 from agentmem.core.services import MemoryService
 
 __all__ = [
