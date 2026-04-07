@@ -59,8 +59,8 @@ class TestEmbedReindexJob:
         assert job._batch_size == 50
         assert job._tenants == ['tenant1', 'tenant2']
 
-    async def test_run_calls_reindex_for_both_tables(self, mock_context):
-        """Test run calls embedding_service.reindex for evidence and facets."""
+    async def test_run_calls_reindex_for_all_tables(self, mock_context):
+        """Test run calls embedding_service.reindex for evidence, facets, and digests."""
         job = EmbedReindexJob()
         mock_context.embedding_service.reindex = AsyncMock(return_value=10)
 
@@ -68,12 +68,13 @@ class TestEmbedReindexJob:
 
         assert isinstance(result, JobResult)
         assert result.success is True
-        # 2 tables * 1 tenant (None=all) * 10 items each = 20
-        assert result.items_processed == 20
-        assert mock_context.embedding_service.reindex.call_count == 2
+        # 3 tables * 1 tenant (None=all) * 10 items each = 30
+        assert result.items_processed == 30
+        assert mock_context.embedding_service.reindex.call_count == 3
         calls = mock_context.embedding_service.reindex.call_args_list
         assert calls[0][0] == ('evidence', None, 100)
         assert calls[1][0] == ('facets', None, 100)
+        assert calls[2][0] == ('digests', None, 100)
 
     async def test_run_with_specific_tenants(self, mock_context):
         """Test run iterates per-tenant when tenants are configured."""
@@ -83,9 +84,9 @@ class TestEmbedReindexJob:
         result = await job.run(mock_context)
 
         assert result.success is True
-        # 2 tables * 2 tenants * 5 items = 20
-        assert result.items_processed == 20
-        assert mock_context.embedding_service.reindex.call_count == 4
+        # 3 tables * 2 tenants * 5 items = 30
+        assert result.items_processed == 30
+        assert mock_context.embedding_service.reindex.call_count == 6
 
     async def test_run_collects_errors(self, mock_context):
         """Test run captures errors per table/tenant without failing."""
@@ -96,7 +97,7 @@ class TestEmbedReindexJob:
 
         assert result.success is True
         assert result.items_processed == 0
-        assert len(result.errors) == 2
+        assert len(result.errors) == 3
 
 
 class TestDigestGenerationJob:

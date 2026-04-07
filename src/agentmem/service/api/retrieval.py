@@ -82,17 +82,22 @@ async def retrieve_semantic(
     query: str = Query(...),
     source_table: str | None = Query(None),
     limit: int = Query(10, le=100),
+    extra_tenants: str | None = Query(None, description='Comma-separated additional tenant IDs'),
 ) -> list[SemanticResult]:
     from agentmem.core.models import VectorFilters
 
     # Get embedding service from request.app.state
     embedding_service = request.app.state.embedding_service
 
+    # Parse extra_tenants into list
+    extra_ids = [t.strip() for t in extra_tenants.split(',') if t.strip()] if extra_tenants else []
+
     # Build VectorFilters from query params
     filters = VectorFilters(
         tenant_id=tenant_id,
         source_table=source_table,
         limit=limit,
+        extra_tenant_ids=extra_ids,
     )
 
     # Delegate to embedding_service.search() which embeds query and searches
@@ -128,12 +133,17 @@ async def retrieve_facets(
     tenant_id: str = Query(...),
     prefix: str | None = Query(None),
     layer: str | None = Query(None),
+    extra_tenants: str | None = Query(None, description='Comma-separated additional tenant IDs'),
 ) -> list[FacetItem]:
     # Get facet_store from request.app.state
     facet_store = request.app.state.facet_store
 
-    # Call facet_store.list()
-    records = await facet_store.list(tenant_id, prefix, layer)
+    # Handle extra_tenants parameter
+    if extra_tenants:
+        all_tenant_ids = [tenant_id] + [t.strip() for t in extra_tenants.split(',') if t.strip()]
+        records = await facet_store.list_multi(all_tenant_ids, prefix=prefix, layer=layer)
+    else:
+        records = await facet_store.list(tenant_id, prefix, layer)
 
     # Return as list of FacetItem
     return [
@@ -302,3 +312,268 @@ async def retrieve_context(
         )
         for section in sections
     ]
+
+
+# ── Conversation turns ────────────────────────────────────────────────────────
+
+class TurnItem(BaseModel):
+    turn_id: str | None
+    content: str
+    occurred_at: datetime
+    source_event_id: str | None
+    user_message: str | None
+    agent_response: str | None
+    conversation_id: str | None
+    channel_id: str | None
+    origin_platform: str | None
+
+
+def _extract_turn_parts(record) -> tuple[str | None, str | None]:
+    """Extract user message and agent response from EvidenceRecord."""
+    meta = record.metadata or {}
+    user_message = meta.get('user_message') or None
+    agent_response = meta.get('agent_response') or None
+    if user_message or agent_response:
+        return user_message, agent_response
+
+    # fallback: parse content string
+    content = record.content
+    user_prefix = 'User said: '
+    agent_prefix = 'Sam responded: '  # or '\nSam responded: '
+    if content.startswith(user_prefix) and agent_prefix in content:
+        parts = content[len(user_prefix):].split(agent_prefix, 1)
+        return parts[0].strip() or None, parts[1].strip() or None
+    return None, None
+
+
+@router.get('/turns', response_model=list[TurnItem])
+async def retrieve_turns(
+    request: Request,
+    tenant_id: str = Query(...),
+    limit: int = Query(12, le=500),
+    conversation_id: str | None = Query(None),
+    channel_id: str | None = Query(None),
+) -> list[TurnItem]:
+    """Retrieve conversation turns with optional conversation/channel filtering."""
+    from agentmem.core.models import EvidenceFilters
+
+    # Get evidence_ledger from request.app.state
+    evidence_ledger = request.app.state.evidence_ledger
+
+    # Build metadata_contains filter for conversation_id if provided
+    metadata_contains = None
+    if conversation_id:
+        metadata_contains = {'conversation_id': conversation_id}
+
+    # Build EvidenceFilters
+    filters = EvidenceFilters(
+        tenant_id=tenant_id,
+        event_type='conversation.turn',
+        limit=limit,
+        channel_id=channel_id,
+        metadata_contains=metadata_contains,
+    )
+
+    # Call evidence_ledger.query()
+    records = await evidence_ledger.query(filters)
+
+    # Map each EvidenceRecord to TurnItem
+    turn_items = []
+    for record in records:
+        user_message, agent_response = _extract_turn_parts(record)
+
+        # Extract conversation_id and origin_platform from metadata
+        meta = record.metadata or {}
+        conv_id = meta.get('conversation_id')
+        platform = meta.get('origin_platform')
+
+        turn_item = TurnItem(
+            turn_id=record.source_event_id,
+            content=record.content,
+            occurred_at=record.occurred_at,
+            source_event_id=record.source_event_id,
+            user_message=user_message,
+            agent_response=agent_response,
+            conversation_id=conv_id,
+            channel_id=record.channel_id,
+            origin_platform=platform,
+        )
+        turn_items.append(turn_item)
+
+    return turn_items
+
+
+# ── Rolling summary ───────────────────────────────────────────────────────────
+
+class TimeRange(BaseModel):
+    start: datetime | None
+    end: datetime | None
+
+
+class SummaryOut(BaseModel):
+    summary: str
+    turn_count: int
+    time_range: TimeRange
+
+
+@router.get("/summary", response_model=SummaryOut)
+async def retrieve_summary(
+    request: Request,
+    tenant_id: str = Query(...),
+    turn_count: int = Query(40, le=500),
+    verbatim_count: int = Query(12, ge=0, le=500),
+    conversation_id: str | None = Query(None),
+    channel_id: str | None = Query(None),
+) -> SummaryOut:
+    """Rolling summary of older turns, compressing everything beyond verbatim_count.
+
+    Fetches up to turn_count turns (newest-first), skips the most recent
+    verbatim_count (those are injected verbatim via /turns), and compresses
+    the remainder into a date-grouped text block for prompt injection.
+    """
+    from collections import defaultdict
+    from agentmem.core.models import EvidenceFilters
+
+    metadata_contains = {"conversation_id": conversation_id} if conversation_id else None
+    filters = EvidenceFilters(
+        tenant_id=tenant_id,
+        event_type="conversation.turn",
+        limit=turn_count,
+        channel_id=channel_id,
+        metadata_contains=metadata_contains,
+    )
+    records = await request.app.state.evidence_ledger.query(filters)
+
+    to_summarize = records[verbatim_count:]
+    if not to_summarize:
+        return SummaryOut(summary="", turn_count=0, time_range=TimeRange(start=None, end=None))
+
+    by_date: dict[str, list[str]] = defaultdict(list)
+    for record in reversed(to_summarize):
+        date_key = record.occurred_at.strftime("%-d %b") if record.occurred_at else "?"
+        user_msg, agent_resp = _extract_turn_parts(record)
+        if user_msg or agent_resp:
+            pieces = []
+            if user_msg:
+                pieces.append(f"User: {user_msg}")
+            if agent_resp:
+                pieces.append(f"Agent: {agent_resp}")
+            content = " | ".join(pieces)
+        else:
+            content = record.content.replace("\n", " ").strip()
+        by_date[date_key].append(content[:80])
+
+    lines = [f"[{date}] {'; '.join(entries)}" for date, entries in by_date.items()]
+    summary_text = "\n".join(lines)
+
+    times = [r.occurred_at for r in to_summarize if r.occurred_at]
+    return SummaryOut(
+        summary=summary_text,
+        turn_count=len(to_summarize),
+        time_range=TimeRange(start=min(times) if times else None, end=max(times) if times else None),
+    )
+
+
+# ── Poetic echoes ─────────────────────────────────────────────────────────────
+
+class EchoesRequest(BaseModel):
+    tenant_id: str
+    query: str | None = None
+    turn_count: int = 0  # 0 = always refresh; >=3 = refresh on every 3rd turn
+
+
+class EchoesOut(BaseModel):
+    echoes: str
+    triplets: list[list[str]]
+    refreshed: bool
+
+
+@router.post("/echoes", response_model=EchoesOut)
+async def retrieve_echoes(request: Request, payload: EchoesRequest) -> EchoesOut:
+    """Generate poetic echo triplets from recent evidence and knowledge graph.
+
+    Extracts proper nouns from recent memory and knowledge graph edges,
+    groups them into word/word/word triplets for non-literal context seeding.
+    Refreshes when turn_count == 0 or turn_count >= 3.
+    """
+    import re
+    from agentmem.core.models import EvidenceFilters
+
+    should_refresh = payload.turn_count == 0 or payload.turn_count >= 3
+    if not should_refresh:
+        return EchoesOut(echoes="", triplets=[], refreshed=False)
+
+    # Fetch recent evidence
+    filters = EvidenceFilters(tenant_id=payload.tenant_id, limit=5)
+    evidence_rows = await request.app.state.evidence_ledger.query(filters)
+
+    # Fetch graph triplets
+    graph_store = request.app.state.graph_store
+    query_words = set((payload.query or "").lower().split()) if payload.query else set()
+    raw_triplets: list[Any] = []
+    if payload.query:
+        # Score by word overlap with query
+        for word in list(query_words)[:3]:
+            try:
+                raw_triplets.extend(await graph_store.query_subject(payload.tenant_id, word))
+            except Exception:
+                pass
+    if not raw_triplets:
+        # Fall back to predicate scan — get a broad sample
+        for pred in ["knows", "likes", "works_on", "prefers", "has"]:
+            try:
+                raw_triplets.extend(await graph_store.query_predicate(payload.tenant_id, pred))
+            except Exception:
+                pass
+
+    # Filter triplets by query word overlap if query provided
+    scored_triplets = raw_triplets
+    if query_words and raw_triplets:
+        scored_triplets = [
+            t for t in raw_triplets
+            if query_words & set(f"{t.subject} {t.predicate} {t.object}".lower().split())
+        ]
+    scored_triplets = scored_triplets[:20]
+
+    # Extract proper noun candidates from evidence
+    candidates: list[str] = []
+    for ev in evidence_rows:
+        candidates.extend(re.findall(r"\b[A-Z][a-z]+\b", ev.content))
+
+    # Add triplet terms
+    for t in scored_triplets[:5]:
+        candidates.extend([
+            t.subject,
+            t.predicate.replace("_", " "),
+            t.object.replace("_", " "),
+        ])
+
+    # Deduplicate preserving order, drop short words
+    seen: set[str] = set()
+    unique: list[str] = []
+    for c in candidates:
+        if c.lower() not in seen and len(c) > 2:
+            seen.add(c.lower())
+            unique.append(c)
+
+    if not unique:
+        return EchoesOut(echoes="", triplets=[], refreshed=True)
+
+    # Pad to multiple of 3
+    while len(unique) % 3 != 0:
+        unique.append("memory")
+
+    # Build triplet groups (max 4 = 12 words)
+    groups: list[list[str]] = []
+    for i in range(0, min(len(unique), 12), 3):
+        groups.append(unique[i:i + 3])
+
+    # Format echoes block
+    lines = ["[Echoes]", ""]
+    for i, group in enumerate(groups):
+        lines.append("/".join(group))
+        if i < len(groups) - 1:
+            lines.append("***")
+    lines.extend(["", "[Depth beneath]"])
+
+    return EchoesOut(echoes="\n".join(lines), triplets=groups, refreshed=True)

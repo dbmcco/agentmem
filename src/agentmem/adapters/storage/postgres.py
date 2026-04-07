@@ -1105,7 +1105,7 @@ class PostgresStorageAdapter:
         if not self._pool:
             raise RuntimeError("Pool not initialized")
 
-        if source_table not in ("evidence", "facets"):
+        if source_table not in ("evidence", "facets", "digests"):
             raise ValueError(f"Invalid source_table: {source_table}")
 
         where_clauses: list[str] = []
@@ -1154,7 +1154,7 @@ class PostgresStorageAdapter:
         if not self._pool:
             raise RuntimeError("Pool not initialized")
 
-        if source_table not in ("evidence", "facets"):
+        if source_table not in ("evidence", "facets", "digests"):
             raise ValueError(f"Invalid source_table: {source_table}")
 
         where_clauses: list[str] = []

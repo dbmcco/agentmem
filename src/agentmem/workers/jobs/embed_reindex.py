@@ -1,5 +1,5 @@
 # ABOUTME: EmbedReindexJob — batch embedding backfill. Replaces scripts/nightly_embed.py.
-# ABOUTME: Finds evidence/facet rows with no VectorStore entry; embeds in batches.
+# ABOUTME: Finds evidence/facet/digest rows with no VectorStore entry; embeds in batches.
 """EmbedReindexJob: scheduled batch embedding reindex."""
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from agentmem.workers.triggers import CronTrigger
 
 
 class EmbedReindexJob(ScheduledJob):
-    """Batch-embed evidence and facet rows that have no VectorStore entry.
+    """Batch-embed evidence, facet, and digest rows that have no VectorStore entry.
 
     Replaces paia-memory's scripts/nightly_embed.py.
 
@@ -19,7 +19,7 @@ class EmbedReindexJob(ScheduledJob):
       tenants:    list[str], default [] (empty = all tenants)
 
     Flow:
-      1. For each source_table in ["evidence", "facets"]:
+      1. For each source_table in ["evidence", "facets", "digests"]:
          a. Call storage_adapter.reindex(source_table, tenant_id) to get orphaned row IDs
          b. For each ID (in batches of batch_size):
             - Fetch content from source table
@@ -47,7 +47,7 @@ class EmbedReindexJob(ScheduledJob):
         # None means "all tenants" — VectorStore.reindex accepts None for tenant_id
         tenants: list[str | None] = self._tenants if self._tenants else [None]
 
-        for source_table in ['evidence', 'facets']:
+        for source_table in ['evidence', 'facets', 'digests']:
             for tenant_id in tenants:
                 try:
                     processed = await context.embedding_service.reindex(

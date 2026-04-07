@@ -72,6 +72,9 @@ class InMemoryStorageAdapter:
             rows = [r for r in rows if r["occurred_at"] >= filters.since]
         if filters.channel_id:
             rows = [r for r in rows if r.get("channel_id") == filters.channel_id]
+        if filters.metadata_contains:
+            for key, value in filters.metadata_contains.items():
+                rows = [r for r in rows if r.get('metadata', {}).get(key) == value]
         rows = sorted(rows, key=lambda r: r["occurred_at"], reverse=True)[: filters.limit]
         return [
             EvidenceRecord(
@@ -305,6 +308,9 @@ class InMemoryStorageAdapter:
         elif source_table == "facets":
             records = list(self.facets.values())
             content_field = "value"
+        elif source_table == "digests":
+            records = list(self.digests.values())
+            content_field = "content"
         else:
             raise ValueError(f"Invalid source_table: {source_table}")
 

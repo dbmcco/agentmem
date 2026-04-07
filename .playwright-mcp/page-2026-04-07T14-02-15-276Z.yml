@@ -1,0 +1,104 @@
+- generic [ref=e1]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - generic [ref=e8]:
+          - button "Hide sidebar" [ref=e9] [cursor=pointer]:
+            - img [ref=e10]
+          - generic [ref=e13]: 🐚🔥freshell
+          - 'button "Remote access: disabled" [ref=e16] [cursor=pointer]':
+            - img [ref=e17]
+        - generic [ref=e21]:
+          - img [ref=e22]
+          - textbox "Search..." [ref=e25]
+        - generic [ref=e27]:
+          - button "Coding Agents (Ctrl+B T)" [ref=e28] [cursor=pointer]:
+            - img [ref=e29]
+          - button "Tabs (Ctrl+B A)" [ref=e31] [cursor=pointer]:
+            - img [ref=e32]
+          - button "Panes (Ctrl+B O)" [ref=e35] [cursor=pointer]:
+            - img [ref=e36]
+          - button "Projects (Ctrl+B P)" [ref=e41] [cursor=pointer]:
+            - img [ref=e42]
+          - button "Settings (Ctrl+B ,)" [ref=e44] [cursor=pointer]:
+            - img [ref=e45]
+        - generic [ref=e50]: No sessions yet
+      - separator "Pane divider (horizontal resize)" [ref=e51]
+    - generic [ref=e59]:
+      - generic [ref=e60]:
+        - button:
+          - img
+        - button "New Tab" [ref=e62] [cursor=pointer]:
+          - button "New Tab" [ref=e63]:
+            - img [ref=e65]
+            - generic [ref=e70]: New Tab
+            - button "Close (Shift+Click to kill)" [ref=e71]:
+              - img [ref=e72]
+        - button:
+          - img
+        - button "New shell tab" [ref=e75] [cursor=pointer]:
+          - img [ref=e76]
+        - status [ref=e77]
+      - generic [ref=e80]:
+        - 'group "Pane: New Tab" [ref=e81]':
+          - 'banner "Pane: New Tab" [ref=e83]':
+            - img [ref=e84]
+            - generic "New Tab" [ref=e90]
+            - generic [ref=e91]:
+              - button "Maximize pane" [ref=e92] [cursor=pointer]:
+                - img [ref=e93]
+              - button "Close pane" [ref=e98] [cursor=pointer]:
+                - img [ref=e99]
+          - toolbar "Pane type picker" [ref=e103]:
+            - generic [ref=e105]:
+              - button "Editor" [ref=e106] [cursor=pointer]:
+                - img [ref=e107]
+                - generic [ref=e110]: Editor
+                - generic [ref=e111]: E
+              - button "Browser" [ref=e112] [cursor=pointer]:
+                - img [ref=e113]
+                - generic [ref=e116]: Browser
+                - generic [ref=e117]: B
+              - button "Shell" [ref=e118] [cursor=pointer]:
+                - img [ref=e119]
+                - generic [ref=e121]: Shell
+                - generic [ref=e122]: S
+        - generic [ref=e123]:
+          - generic [ref=e124]:
+            - button "Split horizontally" [ref=e125] [cursor=pointer]:
+              - img [ref=e126]
+            - button "Split vertically" [ref=e129] [cursor=pointer]:
+              - img [ref=e130]
+          - button "Add pane" [ref=e133] [cursor=pointer]:
+            - img [ref=e134]
+  - dialog "Authentication required" [ref=e136]:
+    - generic [ref=e137]:
+      - heading "Authentication required" [level=2] [ref=e138]
+      - button "Dismiss" [ref=e139] [cursor=pointer]:
+        - img [ref=e140]
+    - paragraph [ref=e143]: This browser is missing a valid auth token for this Freshell server.
+    - generic [ref=e144]:
+      - paragraph [ref=e145]: "Open Freshell using a token URL, like:"
+      - code [ref=e147]: http://localhost:3550/?token=YOUR_AUTH_TOKEN
+      - paragraph [ref=e148]:
+        - text: You can get
+        - code [ref=e149]: YOUR_AUTH_TOKEN
+        - text: "from:"
+      - list [ref=e150]:
+        - listitem [ref=e151]: The server console output (it prints a URL on startup)
+        - listitem [ref=e152]:
+          - text: Your
+          - code [ref=e153]: .env
+          - text: file (
+          - code [ref=e154]: AUTH_TOKEN
+          - text: )
+      - paragraph [ref=e155]:
+        - text: "Tip: if you switch between"
+        - code [ref=e156]: localhost
+        - text: and a VPN/LAN IP, you may need to re-authenticate for the new address.
+    - generic [ref=e157]:
+      - generic [ref=e158]:
+        - generic [ref=e159]: Token or token URL
+        - textbox "Token or token URL" [active] [ref=e160]:
+          - /placeholder: Paste token (or a token URL) here
+      - button "Connect" [ref=e161] [cursor=pointer]

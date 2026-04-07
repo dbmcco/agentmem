@@ -155,3 +155,75 @@ class TestEmbeddingService:
         assert embedding_adapter.embed.call_count == 3
         assert vector_store_adapter.store.call_count == 2  # Only 2 successful embeddings stored
         assert result == 2  # Only count successful embeddings
+
+
+    async def test_reindex_digests(self, service, embedding_adapter, vector_store_adapter):
+        # Given
+        embedding_adapter.model_id = "test-model"
+        vector_store_adapter.find_unembedded.return_value = [
+            (123, "digest content 1", "test-tenant"),
+            (456, "digest content 2", "test-tenant"),
+        ]
+        embedding_adapter.embed.side_effect = [[0.1, 0.2], [0.3, 0.4]]
+
+        # When
+        result = await service.reindex("digests", "test-tenant", 50)
+
+        # Then
+        vector_store_adapter.find_unembedded.assert_called_once_with("digests", "test-tenant", "test-model", 50)
+        assert embedding_adapter.embed.call_count == 2
+        embedding_adapter.embed.assert_any_call("digest content 1")
+        embedding_adapter.embed.assert_any_call("digest content 2")
+        assert vector_store_adapter.store.call_count == 2
+        assert result == 2
+
+    async def test_digest_embedding_end_to_end_workflow(self, service, embedding_adapter, vector_store_adapter):
+        """Test complete workflow: digest -> find_unembedded -> embed -> search."""
+        # Given: A digest exists and embedding/vector services are set up
+        embedding_adapter.model_id = "test-model"
+
+        # Step 1: Digest shows up in find_unembedded
+        digest_content = "This digest contains important historical information"
+        vector_store_adapter.find_unembedded.return_value = [
+            (123, digest_content, "test-tenant"),
+        ]
+        embedding_adapter.embed.return_value = [0.1, 0.2, 0.3, 0.4, 0.5]
+
+        # Step 2: Reindex embeds the digest
+        result = await service.reindex("digests", "test-tenant", 10)
+        assert result == 1
+
+        # Verify embedding was stored with correct VectorRecord
+        vector_store_adapter.store.assert_called_once()
+        stored_record = vector_store_adapter.store.call_args[0][0]
+        assert stored_record.source_table == "digests"
+        assert stored_record.source_id == 123
+        assert stored_record.embedding == [0.1, 0.2, 0.3, 0.4, 0.5]
+        assert stored_record.tenant_id == "test-tenant"
+
+        # Step 3: Semantic search can find the digest
+        from agentmem.core.models import VectorResult, VectorFilters
+
+        # Mock the search to return our digest
+        search_results = [
+            VectorResult(
+                source_table="digests",
+                source_id=123,
+                tenant_id="test-tenant",
+                content=digest_content,
+                score=0.95
+            )
+        ]
+        vector_store_adapter.search.return_value = search_results
+        embedding_adapter.embed.return_value = [0.1, 0.2, 0.3, 0.4, 0.5]  # query embedding
+
+        # When: Searching for content related to the digest
+        filters = VectorFilters(tenant_id="test-tenant", limit=10)
+        found_results = await service.search("historical information", filters)
+
+        # Then: The digest should be found
+        assert len(found_results) == 1
+        assert found_results[0].source_table == "digests"
+        assert found_results[0].source_id == 123
+        assert found_results[0].content == digest_content
+        assert found_results[0].score == 0.95
