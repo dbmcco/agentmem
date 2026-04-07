@@ -317,8 +317,8 @@ class InMemoryStorageAdapter:
             vector_key = (source_table, record["id"], model_id)
             if vector_key not in self.vectors:
                 content = record.get(content_field, "") or ""
-                tenant_id = record.get("tenant_id", "")
-                results.append((record["id"], content, tenant_id))
+                record_tenant_id = record.get("tenant_id", "")
+                results.append((record["id"], content, record_tenant_id))
 
                 if len(results) >= limit:
                     break

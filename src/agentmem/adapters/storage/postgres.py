@@ -1145,7 +1145,7 @@ class PostgresStorageAdapter:
         tenant_id: str | None,
         model_id: str,
         limit: int = 100,
-    ) -> list[tuple[int, str]]:
+    ) -> list[tuple[int, str, str]]:
         """Find rows in source table that don't have embeddings for given model.
 
         Returns list of (source_id, content) pairs for rows needing embedding.
