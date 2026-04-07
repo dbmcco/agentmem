@@ -109,7 +109,7 @@ class TestIngestFacet:
             id=10,
             tenant_id="t1",
             key="user.name",
-            value="Braydon",
+            value="Alice",
             confidence=0.95,
             layer="identity",
         )
@@ -119,7 +119,7 @@ class TestIngestFacet:
             json={
                 "tenant_id": "t1",
                 "key": "user.name",
-                "value": "Braydon",
+                "value": "Alice",
                 "confidence": 0.95,
                 "layer": "identity",
             },
@@ -130,7 +130,7 @@ class TestIngestFacet:
         assert data["id"] == 10
         assert data["tenant_id"] == "t1"
         assert data["key"] == "user.name"
-        assert data["value"] == "Braydon"
+        assert data["value"] == "Alice"
         assert data["confidence"] == 0.95
         assert data["layer"] == "identity"
 
@@ -144,7 +144,7 @@ class TestIngestTriplet:
         mock_graph_store.add.return_value = Triplet(
             id=5,
             tenant_id="t1",
-            subject="Braydon",
+            subject="Alice",
             predicate="works_on",
             object="agentmem",
             confidence=1.0,
@@ -155,7 +155,7 @@ class TestIngestTriplet:
             "/ingest/triplet",
             json={
                 "tenant_id": "t1",
-                "subject": "Braydon",
+                "subject": "Alice",
                 "predicate": "works_on",
                 "object": "agentmem",
                 "confidence": 1.0,
@@ -167,7 +167,7 @@ class TestIngestTriplet:
         data = response.json()
         assert data["id"] == 5
         assert data["tenant_id"] == "t1"
-        assert data["subject"] == "Braydon"
+        assert data["subject"] == "Alice"
         assert data["predicate"] == "works_on"
         assert data["object"] == "agentmem"
         assert data["confidence"] == 1.0

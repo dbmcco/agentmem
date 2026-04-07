@@ -11,7 +11,7 @@ from agentmem.workers.triggers import CronTrigger
 class EmbedReindexJob(ScheduledJob):
     """Batch-embed evidence, facet, and digest rows that have no VectorStore entry.
 
-    Replaces paia-memory's scripts/nightly_embed.py.
+    Runs on a schedule to keep vector search current.
 
     Config keys (from context.config["workers"]["embed_reindex"]):
       trigger:    cron string, default "cron:0 2 * * *"

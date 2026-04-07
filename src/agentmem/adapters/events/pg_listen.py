@@ -1,5 +1,5 @@
 # ABOUTME: PgListenAdapter — PostgreSQL LISTEN/NOTIFY event source.
-# ABOUTME: Reconnect with exponential backoff. Replaces paia-memory's hardcoded background listener.
+# ABOUTME: Reconnect with exponential backoff. Delivers events to a pluggable async handler.
 """PgListenAdapter: PostgreSQL LISTEN/NOTIFY event source adapter."""
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ class PgListenAdapter:
     def __init__(
         self,
         dsn: str,
-        channel: str = "paia_events",
+        channel: str = "agentmem_events",
         reconnect_initial_delay: float = 1.0,
         reconnect_max_delay: float = 30.0,
         reconnect_max_retries: int = 5,

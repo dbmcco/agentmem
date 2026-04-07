@@ -284,7 +284,7 @@ class TestRetrieveTurns:
         evidence_records = [
             EvidenceRecord(
                 id=1, tenant_id="test-tenant", event_type="conversation.turn",
-                content="User said: Hello\nSam responded: Hi there!",
+                content="User said: Hello\nAgent: Hi there!",
                 occurred_at=now, source_event_id="turn-1",
                 dedupe_key="turn-key-1",
                 metadata={"conversation_id": "conv-123", "user_message": "Hello", "agent_response": "Hi there!"},
@@ -301,7 +301,7 @@ class TestRetrieveTurns:
         response_data = response.json()
         assert len(response_data) == 1
         assert response_data[0]["turn_id"] == "turn-1"
-        assert response_data[0]["content"] == "User said: Hello\nSam responded: Hi there!"
+        assert response_data[0]["content"] == "User said: Hello\nAgent: Hi there!"
         assert response_data[0]["user_message"] == "Hello"
         assert response_data[0]["agent_response"] == "Hi there!"
         assert response_data[0]["conversation_id"] == "conv-123"
@@ -324,7 +324,7 @@ class TestRetrieveTurns:
         evidence_records = [
             EvidenceRecord(
                 id=2, tenant_id="test-tenant", event_type="conversation.turn",
-                content="User said: How are you?\nSam responded: I'm doing well, thanks!",
+                content="User said: How are you?\nAgent: I'm doing well, thanks!",
                 occurred_at=now, source_event_id="turn-2",
                 dedupe_key="turn-key-2",
                 metadata={"conversation_id": "conv-456"},
@@ -357,7 +357,7 @@ class TestRetrieveTurns:
         evidence_records = [
             EvidenceRecord(
                 id=3, tenant_id="test-tenant", event_type="conversation.turn",
-                content="User said: What's the weather?\nSam responded: I don't have current weather data.",
+                content="User said: What's the weather?\nAgent: I don't have current weather data.",
                 occurred_at=now, source_event_id="turn-3",
                 dedupe_key="turn-key-3",
                 metadata={"conversation_id": "conv-789"},  # No user_message/agent_response in metadata

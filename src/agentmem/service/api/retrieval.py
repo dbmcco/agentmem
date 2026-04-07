@@ -338,11 +338,11 @@ def _extract_turn_parts(record) -> tuple[str | None, str | None]:
 
     # fallback: parse content string
     content = record.content
-    user_prefix = 'User said: '
-    agent_prefix = 'Sam responded: '  # or '\nSam responded: '
-    if content.startswith(user_prefix) and agent_prefix in content:
-        parts = content[len(user_prefix):].split(agent_prefix, 1)
-        return parts[0].strip() or None, parts[1].strip() or None
+    # Fallback: parse legacy content string format "User said: ... \nAgent: ..."
+    import re as _re
+    m = _re.match(r'^User said: (.*?)(?:\n\S.*?: (.*))?$', content, _re.DOTALL)
+    if m:
+        return m.group(1).strip() or None, (m.group(2) or "").strip() or None
     return None, None
 
 

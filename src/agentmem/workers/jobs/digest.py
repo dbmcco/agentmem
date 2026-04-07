@@ -1,5 +1,5 @@
 # ABOUTME: DigestGenerationJob — nightly progressive digest generation.
-# ABOUTME: Replaces the unscheduled DigestEngine.generate_*() calls in paia-memory.
+# ABOUTME: Runs on cron or turn-count trigger; supports daily, weekly, and monthly digest types.
 """DigestGenerationJob: scheduled digest generation."""
 from __future__ import annotations
 

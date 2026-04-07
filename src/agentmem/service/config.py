@@ -45,7 +45,7 @@ class AgentMemConfig(BaseSettings):
 
     Env var override uses nested delimiter '__':
       AGENTMEM__STORAGE__DSN=postgresql://...
-      AGENTMEM__TENANCY__DEFAULT_TENANT=braydon
+      AGENTMEM__TENANCY__DEFAULT_TENANT=myagent
     """
 
     model_config = SettingsConfigDict(

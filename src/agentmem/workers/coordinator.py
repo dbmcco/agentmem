@@ -1,5 +1,5 @@
 # ABOUTME: WorkerCoordinator — job lifecycle, crash recovery, heartbeat monitoring, state tracking.
-# ABOUTME: The first-class background worker layer that paia-memory was missing.
+# ABOUTME: Supports cron, continuous, event, on-demand, and turn-count triggers.
 """WorkerCoordinator: manages all background jobs."""
 from __future__ import annotations
 

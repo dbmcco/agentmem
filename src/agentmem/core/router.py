@@ -1,5 +1,5 @@
 # ABOUTME: EventRouter — maps event_type glob patterns to content formatters and routing targets.
-# ABOUTME: Replaces paia-memory's hardcoded event_bridge.py with pluggable pattern dispatch.
+# ABOUTME: Supports glob patterns — e.g. "conversation.*" matches all conversation subtypes.
 """EventRouter: pluggable event-type-to-content mapping.
 
 Usage:

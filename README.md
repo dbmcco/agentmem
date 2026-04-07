@@ -33,10 +33,10 @@ The five retrieval primitives map directly to the five lanes of context an agent
 | Lane | What it is | Endpoint |
 |---|---|---|
 | `identity_facets` | Stable identity, tone, relationship state | `GET /retrieve/facets` |
-| `recent_turns` | Verbatim recent conversation evidence | `GET /retrieve/evidence` |
-| `rolling_summary` | Compressed digest of older turns | `GET /retrieve/digests` |
+| `recent_turns` | Verbatim recent conversation evidence | `GET /retrieve/turns`, `GET /retrieve/evidence` |
+| `rolling_summary` | Compressed digest of older turns | `GET /retrieve/summary`, `GET /retrieve/digests` |
 | `semantic_recall` | pgvector cosine search over all memory | `GET /retrieve/semantic` |
-| `graph_recall` | Subject-predicate-object triplet recall | `GET /retrieve/graph` |
+| `graph_recall` | Subject-predicate-object triplet recall | `GET /retrieve/graph`, `POST /retrieve/echoes` |
 | `world_state` | Live context atoms (schedule, obligations) | `GET /retrieve/context` |
 
 Context assembly — combining these lanes into a prompt payload with lane weights and token budgets — is intentionally the caller's responsibility. agentmem provides the primitives; your agent or runtime decides how to blend them.
@@ -154,7 +154,7 @@ Digest
   content      str       — concatenated "[event_type] content" lines
 ```
 
-**v1 note:** Digest content is deterministic (concatenation), not LLM-generated. LLM-generated summaries are v2. Digests are not currently embedded to pgvector — digest semantic search is a planned v2 feature. Digests are triggered on a cron schedule (daily on midnight UTC, weekly on Monday, monthly on the 1st) — not after a fixed number of turns. Turn-count-triggered summarization is also v2.
+**v1 note:** Digest content is deterministic (concatenation), not LLM-generated. LLM-generated summaries are v2. Digests are triggered on a cron schedule (daily at midnight UTC, weekly on Monday, monthly on the 1st) and also via turn-count triggers (`TurnCountTrigger`). Digests are embedded to pgvector alongside evidence and facets.
 
 ### Active context (living atoms)
 
@@ -238,12 +238,15 @@ POST /context/set         — upsert an active context section
 ### Retrieve
 
 ```
-GET /retrieve/evidence    — recent events (filter by type, since, channel)
-GET /retrieve/semantic    — pgvector cosine search over embedded memory
-GET /retrieve/facets      — facet list (filter by prefix, layer)
-GET /retrieve/graph       — triplet query (by subject, predicate, or object)
-GET /retrieve/digests     — list stored digests (filter by type)
-GET /retrieve/context     — active context sections (filter by max_age_seconds)
+GET  /retrieve/evidence    — recent events (filter by type, since, channel)
+GET  /retrieve/turns       — conversation turns (filter by conversation_id, channel_id)
+GET  /retrieve/summary     — rolling digest of older turns grouped by date
+GET  /retrieve/semantic    — pgvector cosine search over embedded memory
+GET  /retrieve/facets      — facet list (filter by prefix, layer)
+GET  /retrieve/graph       — triplet query (by subject, predicate, or object)
+POST /retrieve/echoes      — poetic recall blocks from proper nouns + graph triplets
+GET  /retrieve/digests     — list stored digests (filter by type)
+GET  /retrieve/context     — active context sections (filter by max_age_seconds)
 ```
 
 ### Admin
@@ -270,7 +273,7 @@ export AGENTMEM_TENANT=myagent
 # Ingest
 am ingest evidence --event-type message --content "..."
 am ingest facet persona.tone "warm and direct" --confidence 0.9
-am ingest triplet Braydon "prefers" "direct answers" --confidence 1.0
+am ingest triplet agent0 "prefers" "direct answers" --confidence 1.0
 
 # Retrieve
 am retrieve evidence --limit 20
@@ -283,8 +286,8 @@ am facet list --prefix relationship.
 am facet set persona.tone "concise" --layer identity
 
 # Graph
-am graph query --subject Braydon
-am graph add Braydon "works on" agentmem
+am graph query --subject agent0
+am graph add agent0 "works on" agentmem
 
 # Context
 am context get --max-age-seconds 3600
@@ -472,9 +475,7 @@ All memory is scoped to `tenant_id`. Use a stable identifier for each agent inst
 If you are building on agentmem for a companion/assistant agent, you will want to add:
 
 - **Context assembly**: blend the five retrieval lanes into a single prompt section with token budgeting
-- **Poetic/relationship recall formatting**: format triplet results as natural-language phrases for the agent's persona layer
-- **Turn-count-triggered summarization**: call `am digest generate` after every N turns (not yet built into agentmem's trigger system — add a wrapper in your runtime)
-- **Digest embedding** (planned v2): once digests are embedded, `am retrieve semantic` will also surface compressed older memory
+- **Poetic/relationship recall formatting**: the `/retrieve/echoes` endpoint returns `word/word/word` blocks; wrap these into natural-language phrases for your agent's persona layer
 
 ---
 
@@ -563,10 +564,9 @@ CREATE INDEX ON embeddings USING hnsw (embedding vector_cosine_ops);
 
 ## v1 known limitations
 
-- **Digest embedding**: Digests are not embedded to pgvector. Semantic search only covers `evidence` and `facets`. Adding `digests` to the embed pipeline is planned for v2.
-- **Turn-count triggers**: The worker system supports cron, continuous, event, and on-demand triggers — not turn-count triggers. If you want to summarize after every 50 turns, call `POST /admin/digest/generate` from your runtime after counting turns.
 - **LLM-generated summaries**: Digest content is deterministic (concatenation of evidence lines). LLM rollup summarization is v2.
-- **SQLite adapter**: Mentioned in the design spec, not yet implemented. Postgres is the only shipped storage adapter.
+- **SQLite adapter**: Postgres is the only shipped storage adapter. SQLite is planned for v2 (single-process / embedded deployments).
+- **Echoes endpoint**: Poetic recall (`POST /retrieve/echoes`) requires a graph store with existing triplets. Cold-start agents with no graph data will get empty echo blocks.
 
 ---
 

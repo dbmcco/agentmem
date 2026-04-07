@@ -1,5 +1,5 @@
 # ABOUTME: ActiveContextJob — continuous event-driven context section maintenance.
-# ABOUTME: Replaces paia-memory's ActiveStateBuilder + hardcoded LISTEN/NOTIFY handler.
+# ABOUTME: Subscribes to PgListenAdapter; updates named context sections as events arrive.
 """ActiveContextJob: continuous event-driven active context updater."""
 from __future__ import annotations
 
