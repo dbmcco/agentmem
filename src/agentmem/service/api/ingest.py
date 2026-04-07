@@ -65,6 +65,24 @@ class IngestTripletResponse(BaseModel):
     source: str | None
 
 
+class ContextSetRequest(BaseModel):
+    tenant_id: str
+    section: str
+    content: str
+
+
+class ContextSetResponse(BaseModel):
+    id: int | None
+    tenant_id: str
+    section: str
+    content: str
+    updated_at: datetime | None
+
+
+class ContextDeleteResponse(BaseModel):
+    deleted: bool
+
+
 @router.post("/evidence", response_model=IngestEvidenceResponse)
 async def ingest_evidence(body: IngestEvidenceRequest, request: Request) -> IngestEvidenceResponse:
     """Ingest an evidence record. Returns InsertResult (deduplicated=True if already exists)."""
@@ -158,6 +176,47 @@ async def ingest_triplet(body: IngestTripletRequest, request: Request) -> Ingest
         confidence=result.confidence,
         source=result.source,
     )
+
+
+@router.post("/context/set", response_model=ContextSetResponse, tags=["context"])
+async def context_set(body: ContextSetRequest, request: Request) -> ContextSetResponse:
+    """Set or update a context section."""
+    from agentmem.core.models import ContextSection
+
+    # Get active_context_store from request.app.state
+    active_context_store = request.app.state.active_context_store
+
+    # Build ContextSection from body
+    section = ContextSection(
+        tenant_id=body.tenant_id,
+        section=body.section,
+        content=body.content,
+    )
+
+    # Call active_context_store.upsert()
+    result = await active_context_store.upsert(section)
+
+    # Return response
+    return ContextSetResponse(
+        id=result.id,
+        tenant_id=result.tenant_id,
+        section=result.section,
+        content=result.content,
+        updated_at=result.updated_at,
+    )
+
+
+@router.delete("/context/{tenant_id}/{section}", response_model=ContextDeleteResponse, tags=["context"])
+async def context_delete(tenant_id: str, section: str, request: Request) -> ContextDeleteResponse:
+    """Delete a context section."""
+    # Get active_context_store from request.app.state
+    active_context_store = request.app.state.active_context_store
+
+    # Call active_context_store.delete()
+    deleted = await active_context_store.delete(tenant_id, section)
+
+    # Return response
+    return ContextDeleteResponse(deleted=deleted)
 
 
 @router.get("/status")

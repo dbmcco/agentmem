@@ -96,3 +96,9 @@ def test_facet_get_requires_tenant():
     """am facet get should fail without --tenant."""
     result = runner.invoke(app, ["facet", "get"])
     assert result.exit_code != 0
+
+
+def test_digest_generate_requires_tenant_type_date():
+    """am digest generate should fail without required parameters."""
+    result = runner.invoke(app, ["digest", "generate"])
+    assert result.exit_code != 0

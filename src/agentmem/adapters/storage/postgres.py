@@ -164,9 +164,19 @@ class PostgresStorageAdapter:
         if not self._pool:
             raise RuntimeError("Pool not initialized - call initialize() first")
 
+        # Phase 1: Create extension using autocommit connection
+        # Must be outside transaction as some providers (RDS, Cloud SQL, Supabase) require autocommit mode
+        try:
+            import psycopg
+            async with await psycopg.AsyncConnection.connect(self._dsn, autocommit=True) as conn:
+                await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        except Exception:
+            # Extension may already exist or user lacks permission
+            # Some providers pre-install pgvector, so don't fail the migration
+            pass
+
+        # Phase 2: Create all DDL in transaction
         async with self._pool.connection() as conn:
-            # Enable pgvector extension
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
             # Evidence table
             await conn.execute("""
@@ -896,24 +906,67 @@ class PostgresStorageAdapter:
         # FacetStoreProtocol.list(tenant_id, prefix, layer)
         return await self._list_facets(*args, **kwargs)
 
-    async def delete(self, tenant_id: str, key_or_section: str) -> bool:
-        """Dispatch delete: tries facets first, then active_context."""
+    async def _delete_facet(self, tenant_id: str, key: str) -> bool:
+        """Delete a facet by key. Returns True if deleted, False if not found."""
         if not self._pool:
             raise RuntimeError("Pool not initialized")
         async with self._pool.connection() as conn:
             r = await conn.execute(
                 "DELETE FROM facets WHERE tenant_id = %s AND key = %s",
-                (tenant_id, key_or_section),
-            )
-            if r.rowcount > 0:
-                await conn.commit()
-                return True
-            r = await conn.execute(
-                "DELETE FROM active_context WHERE tenant_id = %s AND section = %s",
-                (tenant_id, key_or_section),
+                (tenant_id, key),
             )
             await conn.commit()
             return r.rowcount > 0
+
+    async def _delete_context_section(self, tenant_id: str, section: str) -> bool:
+        """Delete an active context section. Returns True if deleted, False if not found."""
+        if not self._pool:
+            raise RuntimeError("Pool not initialized")
+        async with self._pool.connection() as conn:
+            r = await conn.execute(
+                "DELETE FROM active_context WHERE tenant_id = %s AND section = %s",
+                (tenant_id, section),
+            )
+            await conn.commit()
+            return r.rowcount > 0
+
+    async def delete(self, tenant_id: str, key_or_section: str) -> bool:
+        """Dispatch delete based on calling context.
+
+        WARNING: This method is ambiguous and deprecated. Use specific delete methods instead.
+        """
+        import inspect
+
+        # Inspect the call stack to determine which protocol is calling
+        frame = inspect.currentframe()
+        try:
+            # Go up the call stack to find the calling domain service
+            caller_frame = frame.f_back
+            while caller_frame:
+                filename = caller_frame.f_code.co_filename
+                if 'facets.py' in filename:
+                    return await self._delete_facet(tenant_id, key_or_section)
+                elif 'active_context.py' in filename:
+                    return await self._delete_context_section(tenant_id, key_or_section)
+                caller_frame = caller_frame.f_back
+
+            # Fallback: if we can't determine the caller, maintain old behavior
+            # but warn about the ambiguity
+            result_facet = await self._delete_facet(tenant_id, key_or_section)
+            if result_facet:
+                return True
+            return await self._delete_context_section(tenant_id, key_or_section)
+        finally:
+            del frame
+
+    # Explicit delete methods to avoid ambiguity
+    async def delete_facet(self, tenant_id: str, key: str) -> bool:
+        """Explicitly delete a facet by key. Returns True if deleted, False if not found."""
+        return await self._delete_facet(tenant_id, key)
+
+    async def delete_context_section(self, tenant_id: str, section: str) -> bool:
+        """Explicitly delete a context section. Returns True if deleted, False if not found."""
+        return await self._delete_context_section(tenant_id, section)
 
     # ── VectorStore ────────────────────────────────────────────────────────────
 
@@ -1086,6 +1139,60 @@ class PostgresStorageAdapter:
             row = await result.fetchone()
             return row[0] if row else 0
 
+    async def find_unembedded(
+        self,
+        source_table: str,
+        tenant_id: str | None,
+        model_id: str,
+        limit: int = 100,
+    ) -> list[tuple[int, str]]:
+        """Find rows in source table that don't have embeddings for given model.
+
+        Returns list of (source_id, content) pairs for rows needing embedding.
+        Used by EmbeddingService.reindex() to actually perform embedding.
+        """
+        if not self._pool:
+            raise RuntimeError("Pool not initialized")
+
+        if source_table not in ("evidence", "facets"):
+            raise ValueError(f"Invalid source_table: {source_table}")
+
+        where_clauses: list[str] = []
+        params: list[Any] = [source_table, model_id]
+
+        if tenant_id:
+            where_clauses.append("s.tenant_id = %s")
+            params.append(tenant_id)
+
+        # Add the same tenant condition to the NOT EXISTS subquery
+        embedding_tenant_filter = ""
+        if tenant_id:
+            embedding_tenant_filter = " AND e.tenant_id = %s"
+            params.append(tenant_id)
+
+        outer_filter = ""
+        if where_clauses:
+            outer_filter = " AND " + " AND ".join(where_clauses)
+
+        # Find rows that don't have embeddings for this model
+        query = f"""
+            SELECT s.id, s.content, s.tenant_id
+            FROM {source_table} s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM embeddings e
+                WHERE e.source_table = %s
+                AND e.source_id = s.id
+                AND e.model_id = %s{embedding_tenant_filter}
+            ){outer_filter}
+            LIMIT %s
+        """
+        params.append(limit)
+
+        async with self._pool.connection() as conn:
+            result = await conn.execute(query, tuple(params))
+            rows = await result.fetchall()
+            return [(row[0], row[1] or "", row[2]) for row in rows]
+
     # ── Worker job state ───────────────────────────────────────────────────────
 
     async def get_job_state(self, name: str) -> dict[str, Any] | None:
@@ -1189,3 +1296,70 @@ class PostgresStorageAdapter:
                 )
 
             await conn.commit()
+
+    # ── Stats ─────────────────────────────────────────────────────────────────────
+
+    async def count_evidence(self, tenant_id: str) -> int:
+        """Return count of evidence records for tenant."""
+        if not self._pool:
+            raise RuntimeError("Pool not initialized")
+
+        async with self._pool.connection() as conn:
+            result = await conn.execute(
+                "SELECT COUNT(*) FROM evidence WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            row = await result.fetchone()
+            return row[0] if row else 0
+
+    async def count_facets(self, tenant_id: str) -> int:
+        """Return count of facet records for tenant."""
+        if not self._pool:
+            raise RuntimeError("Pool not initialized")
+
+        async with self._pool.connection() as conn:
+            result = await conn.execute(
+                "SELECT COUNT(*) FROM facets WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            row = await result.fetchone()
+            return row[0] if row else 0
+
+    async def count_triplets(self, tenant_id: str) -> int:
+        """Return count of knowledge graph triplets for tenant."""
+        if not self._pool:
+            raise RuntimeError("Pool not initialized")
+
+        async with self._pool.connection() as conn:
+            result = await conn.execute(
+                "SELECT COUNT(*) FROM knowledge_graph WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            row = await result.fetchone()
+            return row[0] if row else 0
+
+    async def count_digests(self, tenant_id: str) -> int:
+        """Return count of digest records for tenant."""
+        if not self._pool:
+            raise RuntimeError("Pool not initialized")
+
+        async with self._pool.connection() as conn:
+            result = await conn.execute(
+                "SELECT COUNT(*) FROM digests WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            row = await result.fetchone()
+            return row[0] if row else 0
+
+    async def count_vectors(self, tenant_id: str) -> int:
+        """Return count of embedding vectors for tenant."""
+        if not self._pool:
+            raise RuntimeError("Pool not initialized")
+
+        async with self._pool.connection() as conn:
+            result = await conn.execute(
+                "SELECT COUNT(*) FROM embeddings WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            row = await result.fetchone()
+            return row[0] if row else 0

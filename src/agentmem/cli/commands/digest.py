@@ -43,7 +43,7 @@ def digest_generate(
     """Generate a digest for the given period."""
     request_body = {
         "tenant_id": tenant,
-        "type": type,
+        "digest_type": type,
         "date": date,
     }
 

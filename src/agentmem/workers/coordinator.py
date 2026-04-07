@@ -143,6 +143,8 @@ class WorkerCoordinator:
         job = self._jobs.get(job_name)
         if not job:
             raise KeyError(f'Unknown job: {job_name}')
+        if isinstance(job, ContinuousJob):
+            raise ValueError(f"Cannot run_now a ContinuousJob '{job_name}': use the event trigger instead")
         ctx = self._make_context(job.name)
         return await job.run(ctx)
 

@@ -133,9 +133,9 @@ class TestWeeklyDigest:
         assert result.items_processed == 0
         mock_context.digest_engine.generate.assert_not_called()
 
-    async def test_weekly_period_spans_full_week(self, mock_context):
-        """Weekly period should span Mon 00:00 – Sun 23:59:59."""
-        monday = date(2026, 4, 6)
+    async def test_weekly_period_spans_previous_week(self, mock_context):
+        """Weekly period should span PREVIOUS Mon 00:00 – PREVIOUS Sun 23:59:59."""
+        monday = date(2026, 4, 6)  # Monday
         now = _utc_now_for_date(monday)
 
         job = DigestGenerationJob(types=["weekly"])
@@ -147,8 +147,9 @@ class TestWeeklyDigest:
         call_args = mock_context.digest_engine.generate.call_args[0]
         period_start = call_args[2]
         period_end = call_args[3]
-        assert period_start == datetime(2026, 4, 6, 0, 0, 0, tzinfo=timezone.utc)
-        assert period_end == datetime(2026, 4, 12, 23, 59, 59, tzinfo=timezone.utc)
+        # Should cover PREVIOUS week: Mar 30 (prev Monday) to Apr 5 (prev Sunday)
+        assert period_start == datetime(2026, 3, 30, 0, 0, 0, tzinfo=timezone.utc)
+        assert period_end == datetime(2026, 4, 5, 23, 59, 59, tzinfo=timezone.utc)
 
 
 # ── Monthly digest: only on 1st ────────────────────────────────────────────

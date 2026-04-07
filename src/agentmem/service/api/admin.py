@@ -148,7 +148,7 @@ async def generate_digest(
 
     # Trigger digest job
     result = await coordinator.run_now(
-        "digest",
+        "digest_generation",
         tenant_id=body.tenant_id,
         digest_type=body.digest_type,
         date=body.date,

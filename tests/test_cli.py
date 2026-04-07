@@ -11,6 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 from agentmem.cli.commands.admin import app as admin_app
+from agentmem.cli.commands.context import app as context_app
 from agentmem.cli.commands.digest import app as digest_app
 from agentmem.cli.commands.facet import app as facet_app
 from agentmem.cli.commands.graph import app as graph_app
@@ -365,6 +366,76 @@ def test_workers_run(mock_post):
 
     assert result.exit_code == 0
     mock_post.assert_called_once()
+
+
+@patch("httpx.post")
+def test_context_set(mock_post):
+    """Test context set command."""
+    mock_post.return_value = MockResponse({
+        "id": 123,
+        "tenant_id": "test_tenant",
+        "section": "test_section",
+        "content": "test content",
+        "updated_at": "2024-01-01T00:00:00"
+    })
+
+    result = runner.invoke(context_app, [
+        "set",
+        "--tenant", "test_tenant",
+        "--section", "test_section",
+        "--content", "test content"
+    ])
+
+    assert result.exit_code == 0
+    mock_post.assert_called_once()
+    args, kwargs = mock_post.call_args
+    assert args[0].endswith("/context/set")
+    assert kwargs["json"]["tenant_id"] == "test_tenant"
+    assert kwargs["json"]["section"] == "test_section"
+    assert kwargs["json"]["content"] == "test content"
+
+
+@patch("httpx.delete")
+def test_context_delete(mock_delete):
+    """Test context delete command."""
+    mock_delete.return_value = MockResponse({"deleted": True})
+
+    result = runner.invoke(context_app, [
+        "delete",
+        "--tenant", "test_tenant",
+        "test_section"
+    ])
+
+    assert result.exit_code == 0
+    mock_delete.assert_called_once()
+    args, kwargs = mock_delete.call_args
+    assert args[0].endswith("/context/test_tenant/test_section")
+
+
+@patch("httpx.get")
+def test_context_get(mock_get):
+    """Test context get command."""
+    mock_get.return_value = MockResponse([
+        {
+            "tenant_id": "test_tenant",
+            "section": "test_section",
+            "content": "test content",
+            "updated_at": "2024-01-01T00:00:00"
+        }
+    ])
+
+    result = runner.invoke(context_app, [
+        "get",
+        "--tenant", "test_tenant",
+        "--max-age-seconds", "3600"
+    ])
+
+    assert result.exit_code == 0
+    mock_get.assert_called_once()
+    args, kwargs = mock_get.call_args
+    assert args[0].endswith("/retrieve/context")
+    assert kwargs["params"]["tenant_id"] == "test_tenant"
+    assert kwargs["params"]["max_age_seconds"] == 3600.0
 
 
 @patch("httpx.post")

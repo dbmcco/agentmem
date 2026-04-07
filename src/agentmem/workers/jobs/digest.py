@@ -61,9 +61,11 @@ class DigestGenerationJob(ScheduledJob):
                 count += 1
 
         if 'weekly' in self._types and today.weekday() == 0:  # Monday
-            start_of_week = today - timedelta(days=today.weekday())
-            period_start = datetime(start_of_week.year, start_of_week.month, start_of_week.day, tzinfo=timezone.utc)
-            period_end = period_start + timedelta(days=7) - timedelta(seconds=1)
+            # Generate digest for PREVIOUS week (Monday-Sunday just completed)
+            previous_monday = today - timedelta(days=7)
+            previous_sunday = today - timedelta(days=1)
+            period_start = datetime(previous_monday.year, previous_monday.month, previous_monday.day, tzinfo=timezone.utc)
+            period_end = datetime(previous_sunday.year, previous_sunday.month, previous_sunday.day, 23, 59, 59, tzinfo=timezone.utc)
             for tenant_id in tenants:
                 await context.digest_engine.generate(tenant_id, 'weekly', period_start, period_end)
                 count += 1

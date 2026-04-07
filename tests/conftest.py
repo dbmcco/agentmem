@@ -292,6 +292,39 @@ class InMemoryStorageAdapter:
     async def reindex(self, source_table, tenant_id, limit=100):
         return 0
 
+    async def find_unembedded(self, source_table, tenant_id, model_id, limit=100):
+        """Find records that don't have embeddings for the given model.
+
+        Returns list of (source_id, content) pairs.
+        """
+        results = []
+
+        if source_table == "evidence":
+            records = self.evidence
+            content_field = "content"
+        elif source_table == "facets":
+            records = list(self.facets.values())
+            content_field = "value"
+        else:
+            raise ValueError(f"Invalid source_table: {source_table}")
+
+        for record in records:
+            # Filter by tenant_id if specified
+            if tenant_id and record.get("tenant_id") != tenant_id:
+                continue
+
+            # Check if this record has an embedding for this model
+            vector_key = (source_table, record["id"], model_id)
+            if vector_key not in self.vectors:
+                content = record.get(content_field, "") or ""
+                tenant_id = record.get("tenant_id", "")
+                results.append((record["id"], content, tenant_id))
+
+                if len(results) >= limit:
+                    break
+
+        return results
+
 
 # ── Pytest fixtures ───────────────────────────────────────────────────────────
 

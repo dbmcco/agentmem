@@ -94,3 +94,34 @@ class TestAdminStats:
         assert data["digest_count"] == 10
         assert data["vector_count"] == 75
         assert data["tenant_id"] == "test-tenant"
+
+
+class TestAdminDigest:
+
+    def test_digest_generate_calls_correct_job_name(self, client, mock_coordinator):
+        from datetime import datetime, timezone
+
+        mock_coordinator.run_now.return_value = JobResult(
+            success=True, items_processed=1,
+        )
+
+        request_body = {
+            "tenant_id": "test-tenant",
+            "digest_type": "daily",
+            "date": "2024-01-01T00:00:00Z"
+        }
+
+        response = client.post("/admin/digest/generate", json=request_body)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        # Verify that the correct job name is called
+        # Date is converted from string to datetime object by Pydantic
+        expected_date = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+        mock_coordinator.run_now.assert_called_once_with(
+            "digest_generation",
+            tenant_id="test-tenant",
+            digest_type="daily",
+            date=expected_date
+        )

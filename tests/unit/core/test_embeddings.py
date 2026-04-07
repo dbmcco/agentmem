@@ -103,25 +103,55 @@ class TestEmbeddingService:
         assert results == []
 
 
-    async def test_reindex_delegates_to_vector_store(self, service, vector_store_adapter):
+    async def test_reindex_finds_unembedded_and_embeds_them(self, service, embedding_adapter, vector_store_adapter):
         # Given
-        vector_store_adapter.reindex.return_value = 42
+        embedding_adapter.model_id = "test-model"
+        vector_store_adapter.find_unembedded.return_value = [
+            (123, "test content 1", "test-tenant"),
+            (456, "test content 2", "test-tenant"),
+        ]
+        embedding_adapter.embed.side_effect = [[0.1, 0.2], [0.3, 0.4]]
 
         # When
         result = await service.reindex("evidence", "test-tenant", 50)
 
         # Then
-        vector_store_adapter.reindex.assert_called_once_with("evidence", "test-tenant", 50)
-        assert result == 42
+        vector_store_adapter.find_unembedded.assert_called_once_with("evidence", "test-tenant", "test-model", 50)
+        assert embedding_adapter.embed.call_count == 2
+        embedding_adapter.embed.assert_any_call("test content 1")
+        embedding_adapter.embed.assert_any_call("test content 2")
+        assert vector_store_adapter.store.call_count == 2
+        assert result == 2
 
 
-    async def test_reindex_uses_default_values(self, service, vector_store_adapter):
+    async def test_reindex_uses_default_values(self, service, embedding_adapter, vector_store_adapter):
         # Given
-        vector_store_adapter.reindex.return_value = 100
+        embedding_adapter.model_id = "test-model"
+        vector_store_adapter.find_unembedded.return_value = []
 
         # When
         result = await service.reindex("evidence")
 
         # Then
-        vector_store_adapter.reindex.assert_called_once_with("evidence", None, 100)
-        assert result == 100
+        vector_store_adapter.find_unembedded.assert_called_once_with("evidence", None, "test-model", 100)
+        assert result == 0
+
+
+    async def test_reindex_skips_failed_embeddings(self, service, embedding_adapter, vector_store_adapter):
+        # Given
+        embedding_adapter.model_id = "test-model"
+        vector_store_adapter.find_unembedded.return_value = [
+            (123, "test content 1", "test-tenant"),
+            (456, "test content 2", "test-tenant"),
+            (789, "test content 3", "test-tenant"),
+        ]
+        # Second embedding fails (returns None)
+        embedding_adapter.embed.side_effect = [[0.1, 0.2], None, [0.5, 0.6]]
+
+        # When
+        result = await service.reindex("evidence", "test-tenant")
+
+        # Then
+        assert embedding_adapter.embed.call_count == 3
+        assert vector_store_adapter.store.call_count == 2  # Only 2 successful embeddings stored
+        assert result == 2  # Only count successful embeddings

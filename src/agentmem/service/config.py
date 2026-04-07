@@ -55,6 +55,11 @@ class AgentMemConfig(BaseSettings):
         extra="ignore",
     )
 
+    @classmethod
+    def settings_customise_sources(cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings):
+        from pydantic_settings import TomlConfigSettingsSource
+        return (init_settings, env_settings, TomlConfigSettingsSource(settings_cls), file_secret_settings)
+
     storage: StorageConfig = Field(default_factory=StorageConfig)
     embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
     tenancy: TenancyConfig = Field(default_factory=TenancyConfig)

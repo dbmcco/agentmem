@@ -85,12 +85,8 @@ async def retrieve_semantic(
 ) -> list[SemanticResult]:
     from agentmem.core.models import VectorFilters
 
-    # Get services from request.app.state
-    embedding_adapter = request.app.state.embedding_adapter
-    vector_store = request.app.state.vector_store
-
-    # Embed the query string
-    query_vector = await embedding_adapter.embed(query)
+    # Get embedding service from request.app.state
+    embedding_service = request.app.state.embedding_service
 
     # Build VectorFilters from query params
     filters = VectorFilters(
@@ -99,8 +95,8 @@ async def retrieve_semantic(
         limit=limit,
     )
 
-    # Call vector_store.search()
-    results = await vector_store.search(query_vector, filters)
+    # Delegate to embedding_service.search() which embeds query and searches
+    results = await embedding_service.search(query, filters)
 
     # Return as list of SemanticResult
     return [
@@ -248,8 +244,8 @@ async def retrieve_digests(
 ) -> list[DigestItem]:
     from agentmem.core.models import DigestFilters
 
-    # Get digest_service from request.app.state
-    digest_service = request.app.state.digest_service
+    # Get digest_engine from request.app.state
+    digest_engine = request.app.state.digest_engine
 
     # Build DigestFilters from query params
     filters = DigestFilters(
@@ -258,8 +254,8 @@ async def retrieve_digests(
         limit=limit,
     )
 
-    # Call digest_service.list()
-    records = await digest_service.list(filters)
+    # Call digest_engine.list()
+    records = await digest_engine.list(filters)
 
     # Return as list of DigestItem
     return [
@@ -290,11 +286,11 @@ async def retrieve_context(
     tenant_id: str = Query(...),
     max_age_seconds: float | None = Query(None),
 ) -> list[ContextSectionItem]:
-    # Get context_service from request.app.state
-    context_service = request.app.state.context_service
+    # Get active_context_store from request.app.state
+    active_context_store = request.app.state.active_context_store
 
-    # Call context_service.get_all()
-    sections = await context_service.get_all(tenant_id, max_age_seconds)
+    # Call active_context_store.get_all()
+    sections = await active_context_store.get_all(tenant_id, max_age_seconds)
 
     # Return as list of ContextSectionItem
     return [

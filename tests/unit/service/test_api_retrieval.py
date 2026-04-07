@@ -30,42 +30,35 @@ def mock_graph_store():
 
 
 @pytest.fixture
-def mock_vector_store():
+def mock_digest_engine():
     return AsyncMock()
 
 
 @pytest.fixture
-def mock_digest_service():
+def mock_active_context_store():
     return AsyncMock()
 
 
 @pytest.fixture
-def mock_context_service():
-    return AsyncMock()
+def mock_embedding_service():
+    service = AsyncMock()
+    service.search.return_value = []  # Default empty results
+    return service
 
 
 @pytest.fixture
-def mock_embedding_adapter():
-    adapter = AsyncMock()
-    adapter.model_id = "test-model"
-    adapter.embed.return_value = [0.1, 0.2, 0.3]  # Mock embedding vector
-    return adapter
-
-
-@pytest.fixture
-def test_app(mock_evidence_ledger, mock_facet_store, mock_graph_store, mock_vector_store,
-             mock_digest_service, mock_context_service, mock_embedding_adapter):
+def test_app(mock_evidence_ledger, mock_facet_store, mock_graph_store,
+             mock_digest_engine, mock_active_context_store, mock_embedding_service):
     app = FastAPI()
     app.include_router(router)
 
-    # Mock app.state with the services
+    # Mock app.state with the services using correct attribute names
     app.state.evidence_ledger = mock_evidence_ledger
     app.state.facet_store = mock_facet_store
     app.state.graph_store = mock_graph_store
-    app.state.vector_store = mock_vector_store
-    app.state.digest_service = mock_digest_service
-    app.state.context_service = mock_context_service
-    app.state.embedding_adapter = mock_embedding_adapter
+    app.state.digest_engine = mock_digest_engine
+    app.state.active_context_store = mock_active_context_store
+    app.state.embedding_service = mock_embedding_service
 
     return app
 
@@ -111,16 +104,15 @@ class TestRetrieveEvidence:
 
 class TestRetrieveSemantic:
 
-    async def test_retrieve_semantic_returns_vector_results(self, client, mock_embedding_adapter, mock_vector_store):
+    async def test_retrieve_semantic_returns_vector_results(self, client, mock_embedding_service):
         # Given
-        mock_embedding_adapter.embed.return_value = [0.1, 0.2, 0.3]
         vector_results = [
             VectorResult(
                 source_table="evidence", source_id=123, tenant_id="test-tenant",
                 content="matching content", score=0.95
             )
         ]
-        mock_vector_store.search.return_value = vector_results
+        mock_embedding_service.search.return_value = vector_results
 
         # When
         response = client.get("/retrieve/semantic?tenant_id=test-tenant&query=search%20term&limit=5")
@@ -133,15 +125,12 @@ class TestRetrieveSemantic:
         assert response_data[0]["source_id"] == 123
         assert response_data[0]["score"] == 0.95
 
-        # Verify embedding adapter called to encode query
-        mock_embedding_adapter.embed.assert_called_once_with("search term")
-
-        # Verify vector store search called
-        mock_vector_store.search.assert_called_once()
-        call_args = mock_vector_store.search.call_args
-        query_vector = call_args[0][0]
+        # Verify embedding_service.search called with correct parameters
+        mock_embedding_service.search.assert_called_once()
+        call_args = mock_embedding_service.search.call_args
+        query = call_args[0][0]
         filters = call_args[0][1]
-        assert query_vector == [0.1, 0.2, 0.3]
+        assert query == "search term"
         assert isinstance(filters, VectorFilters)
         assert filters.tenant_id == "test-tenant"
         assert filters.limit == 5
@@ -174,9 +163,42 @@ class TestRetrieveFacets:
         mock_facet_store.list.assert_called_once_with("test-tenant", "user_", "searchable")
 
 
+class TestRetrieveDigests:
+
+    async def test_retrieve_digests_returns_digest_list(self, client, mock_digest_engine):
+        # Given
+        now = datetime.now(timezone.utc)
+        digest_records = [
+            Digest(
+                id=789, tenant_id="test-tenant", digest_type="daily",
+                period_start=now, period_end=now, content="Daily summary"
+            )
+        ]
+        mock_digest_engine.list.return_value = digest_records
+
+        # When
+        response = client.get("/retrieve/digests?tenant_id=test-tenant&type=daily&limit=20")
+
+        # Then
+        assert response.status_code == 200
+        response_data = response.json()
+        assert len(response_data) == 1
+        assert response_data[0]["id"] == 789
+        assert response_data[0]["digest_type"] == "daily"
+        assert response_data[0]["content"] == "Daily summary"
+
+        # Verify digest_engine.list called with correct filters
+        mock_digest_engine.list.assert_called_once()
+        filters = mock_digest_engine.list.call_args[0][0]
+        assert isinstance(filters, DigestFilters)
+        assert filters.tenant_id == "test-tenant"
+        assert filters.digest_type == "daily"
+        assert filters.limit == 20
+
+
 class TestRetrieveContext:
 
-    async def test_retrieve_context_returns_context_sections(self, client, mock_context_service):
+    async def test_retrieve_context_returns_context_sections(self, client, mock_active_context_store):
         # Given
         now = datetime.now(timezone.utc)
         context_sections = [
@@ -185,7 +207,7 @@ class TestRetrieveContext:
                 content="Profile data", updated_at=now
             )
         ]
-        mock_context_service.get_all.return_value = context_sections
+        mock_active_context_store.get_all.return_value = context_sections
 
         # When
         response = client.get("/retrieve/context?tenant_id=test-tenant&max_age_seconds=3600")
@@ -197,5 +219,5 @@ class TestRetrieveContext:
         assert response_data[0]["section"] == "user_profile"
         assert response_data[0]["content"] == "Profile data"
 
-        # Verify context_service.get_all called
-        mock_context_service.get_all.assert_called_once_with("test-tenant", 3600.0)
+        # Verify active_context_store.get_all called
+        mock_active_context_store.get_all.assert_called_once_with("test-tenant", 3600.0)

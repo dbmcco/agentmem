@@ -102,6 +102,14 @@ class VectorStore(Protocol):
         limit: int = 100,       # maximum number of items to reindex
     ) -> int: ...
 
+    async def find_unembedded(
+        self,
+        source_table: str,      # "evidence" | "facets"
+        tenant_id: str | None,  # if None, find all tenants
+        model_id: str,          # embedding model ID to check against
+        limit: int = 100,       # maximum number of items to return
+    ) -> list[tuple[int, str, str]]: ...  # list of (source_id, content, tenant_id) tuples
+
 
 @runtime_checkable
 class EmbeddingAdapter(Protocol):

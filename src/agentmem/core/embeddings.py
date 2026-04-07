@@ -89,5 +89,22 @@ class EmbeddingService:
         tenant_id: str | None = None,
         limit: int = 100
     ) -> int:
-        """Reindex vectors. Returns number of vectors processed."""
-        return await self._store.reindex(source_table, tenant_id, limit)
+        """Reindex vectors by actually embedding and storing unembedded records.
+
+        Returns number of vectors successfully processed (embedded and stored).
+        """
+        # Find records that need embedding for this model
+        unembedded = await self._store.find_unembedded(
+            source_table, tenant_id, self._adapter.model_id, limit
+        )
+
+        count = 0
+        for source_id, content, record_tenant_id in unembedded:
+            # Use embed_and_store to handle embedding and storage
+            result = await self.embed_and_store(
+                source_table, source_id, content, record_tenant_id
+            )
+            if result is not None:  # Only count successful embeddings
+                count += 1
+
+        return count

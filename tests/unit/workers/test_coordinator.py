@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 import pytest
 
 from agentmem.core.models import JobResult, JobStatus
-from agentmem.workers.coordinator import JobContext, ScheduledJob, WorkerCoordinator
-from agentmem.workers.triggers import OnDemandTrigger
+from agentmem.workers.coordinator import JobContext, ScheduledJob, ContinuousJob, WorkerCoordinator
+from agentmem.workers.triggers import OnDemandTrigger, ContinuousTrigger
 
 
 @dataclass
@@ -22,6 +22,18 @@ class MockJob(ScheduledJob):
     async def run(self, context: JobContext) -> JobResult:
         self.run_count += 1
         return JobResult(success=True, items_processed=1)
+
+
+@dataclass
+class MockContinuousJob(ContinuousJob):
+    """Mock continuous job for testing."""
+
+    name: str = "test_continuous_job"
+    trigger: ContinuousTrigger = field(default_factory=lambda: ContinuousTrigger(source="test_source"))
+    handle_count: int = 0
+
+    async def handle(self, event, context: JobContext) -> None:
+        self.handle_count += 1
 
 
 @pytest.fixture
@@ -77,6 +89,30 @@ async def test_run_now_unknown_job(mock_context):
 
     with pytest.raises(KeyError, match="Unknown job: nonexistent"):
         await coordinator.run_now("nonexistent")
+
+
+async def test_run_now_continuous_job_raises_error(mock_context):
+    """Test run_now raises ValueError when called with ContinuousJob."""
+    coordinator = WorkerCoordinator(mock_context)
+    job = MockContinuousJob()
+
+    coordinator.register(job)
+
+    with pytest.raises(ValueError, match="Cannot run_now a ContinuousJob 'test_continuous_job': use the event trigger instead"):
+        await coordinator.run_now("test_continuous_job")
+
+
+async def test_run_now_scheduled_job_works(mock_context):
+    """Test run_now works correctly for ScheduledJob."""
+    coordinator = WorkerCoordinator(mock_context)
+    job = MockJob()
+
+    coordinator.register(job)
+    result = await coordinator.run_now("test_job")
+
+    assert result.success is True
+    assert result.items_processed == 1
+    assert job.run_count == 1
 
 
 async def test_pubsub_publish_delivers(mock_context):
