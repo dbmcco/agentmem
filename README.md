@@ -39,7 +39,184 @@ The five retrieval primitives map directly to the five lanes of context an agent
 | `graph_recall` | Subject-predicate-object triplet recall | `GET /retrieve/graph`, `POST /retrieve/echoes` |
 | `world_state` | Live context atoms (schedule, obligations) | `GET /retrieve/context` |
 
-Context assembly — combining these lanes into a prompt payload with lane weights and token budgets — is intentionally the caller's responsibility. agentmem provides the primitives; your agent or runtime decides how to blend them.
+agentmem provides the retrieval primitives. Context assembly — blending these lanes into a prompt with weights and token budgets — is intentionally the caller's responsibility.
+
+---
+
+## Context injection
+
+### Philosophy
+
+The central idea is that context is not monolithic. A well-assembled context window is five distinct signals stacked in priority order, each serving a different purpose:
+
+- **Identity facets** anchor *who the agent is* and *how it relates to this user*. These are the most stable and least token-intensive. They go first and get clipped last.
+- **World state** captures *what is happening right now*. Schedule, active task, current obligations. This changes on every turn and must be current.
+- **Recent turns** provide verbatim memory of *what was just said*. Recency matters most here — fetch the last N turns and include them verbatim.
+- **Rolling summary** bridges *what was said days ago*. Digests are compressed chronologically — include the most recent digest first, then older ones as budget allows.
+- **Semantic recall** surfaces *what is relevant to this specific query* regardless of when it happened. Run a vector search against the current user message. This is the highest-signal lane for topic continuity.
+- **Graph recall / echoes** adds *relational texture* — known facts about entities mentioned in this turn. Triplets like `agent0 / prefers / direct answers` reinforce persona and relationship context.
+
+The rule: **recency beats depth, but semantic relevance can override recency.** A message from three weeks ago that scores 0.92 cosine similarity to the current query is more useful than a message from yesterday that scores 0.3.
+
+### Token budget
+
+Token budgets are not one-size-fits-all, but a reasonable starting allocation for a 4K context window looks like this:
+
+| Lane | Suggested budget | Why |
+|---|---|---|
+| Identity facets | 300–500 tokens | Stable; clippping it hurts persona consistency |
+| World state | 100–200 tokens | Short atoms; usually just a few key-value pairs |
+| Recent turns | 800–1500 tokens | Verbatim is expensive but necessary for coherence |
+| Rolling summary | 400–800 tokens | Compressed digest — recent daily first, then weekly |
+| Semantic recall | 400–800 tokens | Top 3–5 results; clip by score threshold (e.g. ≥ 0.70) |
+| Graph recall | 100–200 tokens | Triplets are compact; include up to ~10 |
+
+For 8K–16K context windows, expand recent turns and rolling summary first. Semantic recall rarely needs more than 5–8 results regardless of budget.
+
+### Injection point
+
+Inject assembled context into the **system prompt**, not the user turn. The system prompt persists across the conversation turn and is processed before the user message, which is the right evaluation order.
+
+Recommended structure:
+
+```
+[SYSTEM PROMPT]
+
+<identity>
+{identity_facets}
+</identity>
+
+<world_state>
+{world_state}
+</world_state>
+
+<memory>
+## What we talked about recently
+{recent_turns}
+
+## Older context (compressed)
+{rolling_summary}
+
+## Relevant past context
+{semantic_recall}
+
+## Known facts
+{graph_recall}
+</memory>
+
+[your agent instructions follow here]
+```
+
+The XML-style tags are optional but help the model treat memory as a distinct signal from instructions.
+
+### Python example
+
+```python
+import httpx
+from dataclasses import dataclass
+
+AGENTMEM_URL = "http://localhost:3510"
+TENANT = "myagent"
+
+@dataclass
+class ContextWindow:
+    identity: str
+    world_state: str
+    recent_turns: str
+    rolling_summary: str
+    semantic_recall: str
+    graph_recall: str
+
+    def render(self) -> str:
+        parts = []
+        if self.identity:
+            parts.append(f"<identity>\n{self.identity}\n</identity>")
+        if self.world_state:
+            parts.append(f"<world_state>\n{self.world_state}\n</world_state>")
+        memory_sections = []
+        if self.recent_turns:
+            memory_sections.append(f"## Recent turns\n{self.recent_turns}")
+        if self.rolling_summary:
+            memory_sections.append(f"## Summary of older context\n{self.rolling_summary}")
+        if self.semantic_recall:
+            memory_sections.append(f"## Relevant past context\n{self.semantic_recall}")
+        if self.graph_recall:
+            memory_sections.append(f"## Known facts\n{self.graph_recall}")
+        if memory_sections:
+            parts.append("<memory>\n" + "\n\n".join(memory_sections) + "\n</memory>")
+        return "\n\n".join(parts)
+
+
+async def build_context(user_message: str, conversation_id: str) -> ContextWindow:
+    async with httpx.AsyncClient(base_url=AGENTMEM_URL) as client:
+        # Run all retrieval lanes in parallel
+        import asyncio
+        facets_r, world_r, turns_r, summary_r, semantic_r, graph_r = await asyncio.gather(
+            client.get("/retrieve/facets", params={"tenant_id": TENANT, "prefix": "persona.", "limit": 20}),
+            client.get("/retrieve/context", params={"tenant_id": TENANT, "max_age_seconds": 3600}),
+            client.get("/retrieve/turns", params={"tenant_id": TENANT, "conversation_id": conversation_id, "limit": 20}),
+            client.get("/retrieve/summary", params={"tenant_id": TENANT, "verbatim_count": 20, "limit": 5}),
+            client.get("/retrieve/semantic", params={"tenant_id": TENANT, "q": user_message, "limit": 5, "min_score": 0.70}),
+            client.get("/retrieve/graph", params={"tenant_id": TENANT, "limit": 10}),
+        )
+
+        # Format identity facets as key: value lines
+        identity_lines = [f"{f['key']}: {f['value']}" for f in facets_r.json()]
+
+        # Format world state atoms
+        world_lines = [f"{s['section']}: {s['content']}" for s in world_r.json()]
+
+        # Format turns as User/Agent pairs
+        turn_lines = []
+        for t in turns_r.json():
+            if t.get("user_message"):
+                turn_lines.append(f"User: {t['user_message']}")
+            if t.get("agent_response"):
+                turn_lines.append(f"Agent: {t['agent_response']}")
+
+        # Format digests from summary endpoint
+        summary_lines = [f"[{s['period_label']}] {s['content']}" for s in summary_r.json()]
+
+        # Format semantic results — include score for transparency
+        semantic_lines = [
+            f"[score={r['score']:.2f}] {r['content']}" for r in semantic_r.json()
+        ]
+
+        # Format graph triplets
+        graph_lines = [
+            f"{t['subject']} / {t['predicate']} / {t['object']}" for t in graph_r.json()
+        ]
+
+        return ContextWindow(
+            identity="\n".join(identity_lines),
+            world_state="\n".join(world_lines),
+            recent_turns="\n".join(turn_lines),
+            rolling_summary="\n".join(summary_lines),
+            semantic_recall="\n".join(semantic_lines),
+            graph_recall="\n".join(graph_lines),
+        )
+
+
+# Usage
+ctx = await build_context(user_message="What's the status on the project?", conversation_id="conv-42")
+system_prompt = base_instructions + "\n\n" + ctx.render()
+```
+
+All six retrieval calls run concurrently via `asyncio.gather`. On a warm Postgres instance this round-trip is typically under 50ms.
+
+### Lane weights in practice
+
+Not all turns need all lanes. Tune based on query type:
+
+| Query type | Lanes to emphasize |
+|---|---|
+| Continuing a thread | recent_turns (high), rolling_summary (medium) |
+| "Do you remember when..." | rolling_summary (high), semantic_recall (high) |
+| Task-focused ("write the email") | world_state (high), identity_facets (medium) |
+| Relational question ("how do I usually...") | graph_recall (high), identity_facets (high) |
+| First turn of a new conversation | identity_facets (high), world_state (high), semantic_recall (medium) |
+
+The simplest weight system is just adjusting `limit` per lane — more results = more tokens = more signal. Start with the defaults above and tune based on observed coherence.
 
 ---
 
@@ -417,27 +594,19 @@ You do not need to remember anything yourself. agentmem remembers for you.
 
 ### Memory loop (every turn)
 
-**Step 1 — Before responding:** Pull context.
+**Step 1 — Before responding:** Pull and assemble context. See [Context injection](#context-injection) for the full philosophy and a Python assembly example. The quick version:
 
 ```bash
-# Get living context atoms (schedule, current task, recent alerts)
-am context get --max-age-seconds 3600
-
-# Get the last 20 conversation turns
-am retrieve evidence --limit 20 --event-type message
-
-# Semantic search for anything relevant to this turn's query
-am retrieve semantic --q "<current user message>" --limit 5
-
-# Get identity and relationship facets
-am retrieve facets --prefix persona.
-am retrieve facets --prefix relationship.
-
-# Get recent digest (compressed older memory)
-am digest list --type daily --limit 3
+# Run all six lanes — order doesn't matter, they're independent
+am retrieve facets --prefix persona. --prefix relationship.   # identity
+am context get --max-age-seconds 3600                         # world state
+am retrieve turns --conversation-id <id> --limit 20           # recent turns
+am retrieve summary --verbatim-count 20 --limit 5             # rolling summary
+am retrieve semantic --q "<current user message>" --limit 5   # semantic recall
+am retrieve graph --limit 10                                  # graph recall
 ```
 
-Combine these lanes with your own weighting. The semantic search and facets are the highest signal for most turns. Digests become important when the user references something from days ago.
+Inject into your system prompt in this order: identity → world state → recent turns → rolling summary → semantic recall → graph recall. Semantic search and identity facets are highest signal for most turns. Rolling summary becomes critical when the user references something from days or weeks ago.
 
 **Step 2 — After responding:** Ingest what happened.
 
@@ -472,10 +641,11 @@ All memory is scoped to `tenant_id`. Use a stable identifier for each agent inst
 
 ### What your runtime layer should add on top
 
-If you are building on agentmem for a companion/assistant agent, you will want to add:
+agentmem handles storage, retrieval, and embedding. Your runtime layer adds:
 
-- **Context assembly**: blend the five retrieval lanes into a single prompt section with token budgeting
-- **Poetic/relationship recall formatting**: the `/retrieve/echoes` endpoint returns `word/word/word` blocks; wrap these into natural-language phrases for your agent's persona layer
+- **Context assembly**: see [Context injection](#context-injection) — the Python `build_context()` example is a complete starting point
+- **Token budgeting**: clip lanes by adjusting `limit` per lane; clip order is graph_recall → semantic_recall → rolling_summary → recent_turns → world_state → identity_facets (identity gets clipped last)
+- **Echoes formatting**: `/retrieve/echoes` returns `word/word/word` triplet blocks; wrap them into natural-language persona phrases before injecting
 
 ---
 
