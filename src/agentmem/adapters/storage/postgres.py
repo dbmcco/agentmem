@@ -375,7 +375,13 @@ class PostgresStorageAdapter:
 
             records = []
             for row in rows:
-                metadata = json.loads(row[7]) if row[7] else None
+                raw_meta = row[7]
+                if raw_meta is None:
+                    metadata = None
+                elif isinstance(raw_meta, dict):
+                    metadata = raw_meta
+                else:
+                    metadata = json.loads(raw_meta)
                 records.append(EvidenceRecord(
                     id=row[0],
                     tenant_id=row[1],
