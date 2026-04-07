@@ -310,22 +310,15 @@ Before your agent handles any turns, seed its identity facets. These anchor the 
 export AGENTMEM_URL=http://localhost:3510
 export AGENTMEM_TENANT=myagent
 
-# Persona layer — who the agent is
-am ingest facet persona.tone "warm and direct" --layer identity --confidence 1.0
-am ingest facet persona.style "concise, avoids jargon" --layer identity --confidence 1.0
-am ingest facet persona.role "personal assistant" --layer identity --confidence 1.0
+# Run the worked example (fictional agent + user, all layers, fully commented)
+bash examples/bootstrap_facets.sh
 
-# Relationship layer — how the agent relates to this user
-am ingest facet relationship.user.name "Alice" --layer identity --confidence 1.0
-am ingest facet relationship.user.preferences "prefers bullet points over prose" --layer identity --confidence 0.9
-am ingest facet relationship.user.timezone "America/New_York" --layer identity --confidence 1.0
-
-# World state — prime the active context
+# Prime the active context
 am context set --section current_task --content "ready"
 am context set --section schedule --content "no upcoming events"
 ```
 
-See [Facets](#facets) for the full naming conventions and layer guide.
+See [Facets](#facets) for the full naming conventions, layer guide, and the minimum viable set.
 
 ### 6. Verify
 
@@ -396,27 +389,26 @@ Keys use dot-namespaced hierarchy. Standard prefixes:
 
 #### Bootstrap examples
 
+A complete worked example is in [`examples/bootstrap_facets.sh`](examples/bootstrap_facets.sh). It seeds a fictional agent (Aria) with a fictional user (Alex) across all layers and namespaces — every facet is commented with why it exists. Copy it, replace the values, and run it.
+
 ```bash
-# Persona — set once at agent initialization
-am ingest facet persona.tone "warm, direct, and concise" --layer identity --confidence 1.0
-am ingest facet persona.style "uses bullet points for lists; avoids jargon" --layer identity --confidence 1.0
+export AGENTMEM_URL=http://localhost:3510
+export AGENTMEM_TENANT=myagent
+bash examples/bootstrap_facets.sh
+```
+
+The key facets to seed before your agent handles any turns:
+
+```bash
+# Minimum viable identity — without these, every response starts blind
+am ingest facet persona.tone "warm, direct, and unhurried" --layer identity --confidence 1.0
 am ingest facet persona.role "personal assistant" --layer identity --confidence 1.0
-am ingest facet persona.name "Aria" --layer identity --confidence 1.0  # optional agent name
-
-# User relationship — fill in from onboarding or profile
-am ingest facet relationship.user.name "Alice" --layer identity --confidence 1.0
-am ingest facet relationship.user.timezone "America/New_York" --layer identity --confidence 1.0
-am ingest facet relationship.user.preferred_language "English" --layer identity --confidence 1.0
+am ingest facet persona.style "concise; bullet points for lists" --layer identity --confidence 1.0
+am ingest facet relationship.user.name "Alex" --layer identity --confidence 1.0
+am ingest facet relationship.user.timezone "America/Chicago" --layer identity --confidence 1.0
 am ingest facet relationship.user.communication_style "direct; prefers brevity" --layer identity --confidence 0.9
-am ingest facet relationship.user.affect "positive" --layer identity --confidence 0.7
-
-# World context
-am ingest facet world.user.role "product manager" --layer identity --confidence 0.9
-am ingest facet world.org "Acme Corp" --layer identity --confidence 1.0
-
-# Runtime — updated during operation
+am ingest facet relationship.user.affect "positive" --layer identity --confidence 0.75
 am ingest facet runtime.mode "assistant" --layer runtime --confidence 1.0
-am ingest facet runtime.current_task "none" --layer runtime --confidence 1.0
 ```
 
 #### Querying facets
