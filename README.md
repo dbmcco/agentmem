@@ -244,28 +244,98 @@ The core layer has **zero concrete imports**. Every storage and embedding techno
 
 ## Quick start
 
+### 1. Start Postgres with pgvector
+
 ```bash
-# Install with Postgres + service extras
-pip install agentmem[service,postgres]
+docker compose up -d
+```
 
-# Set connection
-export AGENTMEM__STORAGE__DSN="postgresql://user:pass@localhost:5432/agentmem"
-export AGENTMEM__EMBEDDINGS__BASE_URL="http://localhost:11434"  # Ollama
+This starts `pgvector/pgvector:pg16` on port 5432 with database `agentmem`, user `agentmem`, password `agentmem`. If you already have a Postgres instance with pgvector installed, skip this step and set `AGENTMEM__STORAGE__DSN` to your DSN.
+
+### 2. Install
+
+```bash
+pip install agentmem[service,cli,ollama]
+# or with uv:
+uv add agentmem[service,cli,ollama]
+```
+
+Extras:
+- `service` — FastAPI HTTP service and uvicorn
+- `cli` — the `am` shell command
+- `ollama` — Ollama embedding adapter (local embeddings)
+- `openai` — OpenAI embedding adapter
+- `all` — everything
+
+### 3. Configure
+
+Create `agentmem.toml` in your working directory (or export environment variables):
+
+```toml
+[storage]
+dsn = "postgresql://agentmem:agentmem@localhost:5432/agentmem"
+
+[embeddings]
+backend = "ollama"
+url = "http://localhost:11434"
+model = "nomic-embed-text"
+dimensions = 768
+
+[tenancy]
+mode = "single"
+default_tenant = "myagent"
+```
+
+Environment variable overrides use double-underscore separators:
+
+```bash
+export AGENTMEM__STORAGE__DSN="postgresql://agentmem:agentmem@localhost:5432/agentmem"
+export AGENTMEM__EMBEDDINGS__URL="http://localhost:11434"
 export AGENTMEM__EMBEDDINGS__MODEL="nomic-embed-text"
+export AGENTMEM__TENANCY__DEFAULT_TENANT="myagent"
+```
 
-# Run migrations and start the service
+### 4. Migrate and start
+
+```bash
 am admin migrate
 uvicorn agentmem.service.app:create_app --factory --port 3510
+```
 
-# Ingest an event
-am ingest evidence --tenant myagent \
-  --event-type message \
-  --content "User asked about project deadline"
+### 5. Bootstrap your agent's identity
 
-# Retrieve context before responding
-am retrieve semantic --tenant myagent --q "project deadline" --limit 5
+Before your agent handles any turns, seed its identity facets. These anchor the context window on every response — without them the agent has no stable persona or relationship state to draw from.
+
+```bash
+export AGENTMEM_URL=http://localhost:3510
+export AGENTMEM_TENANT=myagent
+
+# Persona layer — who the agent is
+am ingest facet persona.tone "warm and direct" --layer identity --confidence 1.0
+am ingest facet persona.style "concise, avoids jargon" --layer identity --confidence 1.0
+am ingest facet persona.role "personal assistant" --layer identity --confidence 1.0
+
+# Relationship layer — how the agent relates to this user
+am ingest facet relationship.user.name "Alice" --layer identity --confidence 1.0
+am ingest facet relationship.user.preferences "prefers bullet points over prose" --layer identity --confidence 0.9
+am ingest facet relationship.user.timezone "America/New_York" --layer identity --confidence 1.0
+
+# World state — prime the active context
+am context set --section current_task --content "ready"
+am context set --section schedule --content "no upcoming events"
+```
+
+See [Facets](#facets) for the full naming conventions and layer guide.
+
+### 6. Verify
+
+```bash
+# Check everything is wired
+am admin stats --tenant myagent
+
+# Test retrieval
+am retrieve facets --tenant myagent --prefix persona.
 am retrieve context --tenant myagent
-am retrieve evidence --tenant myagent --limit 20
 ```
 
 ---
@@ -292,18 +362,79 @@ Embeddings are stored separately in the vector store — never as a column on th
 
 ### Facets (key-value memory)
 
-Facets are structured facts about the agent or its relationships. They are intended to be stable and high-signal — not raw events.
+Facets are structured facts about the agent or its relationships. They are stable and high-signal — not raw events. Where evidence captures *what happened*, facets capture *what is true*.
 
 ```
 FacetRecord
   tenant_id   str    — namespace
-  key         str    — namespaced key, e.g. "persona.tone", "relationship.user.affect"
-  value       str    — string value (JSON strings accepted)
+  key         str    — dot-namespaced key, e.g. "persona.tone"
+  value       str    — string value (JSON strings accepted for structured data)
   confidence  float  — 0.0–1.0
   layer       str    — "identity" | "runtime" | "derived"
 ```
 
-Facets support prefix queries: `am facet list --tenant myagent --prefix persona.` returns all persona facets.
+#### Layers
+
+| Layer | What it holds | Who writes it | Changes how often |
+|---|---|---|---|
+| `identity` | Stable persona, relationship state, user preferences | Bootstrapped by you; updated deliberately | Rarely (days to months) |
+| `runtime` | Current mode, active project, session state | Agent writes during operation | Per-session or per-task |
+| `derived` | Inferred facts from evidence patterns | DigestGenerationJob or your inference layer | As evidence accumulates |
+
+#### Naming conventions
+
+Keys use dot-namespaced hierarchy. Standard prefixes:
+
+| Prefix | Examples | Purpose |
+|---|---|---|
+| `persona.*` | `persona.tone`, `persona.style`, `persona.role` | Agent's own character and voice |
+| `relationship.user.*` | `relationship.user.name`, `relationship.user.timezone`, `relationship.user.preferences` | Facts about the primary user |
+| `relationship.user.affect` | `relationship.user.affect` | Emotional/relational state (positive, neutral, strained) |
+| `runtime.*` | `runtime.current_task`, `runtime.mode`, `runtime.last_tool` | Live operational state |
+| `derived.*` | `derived.user.topics`, `derived.user.communication_style` | Inferred from evidence |
+| `world.*` | `world.user.location`, `world.user.role`, `world.org` | Slow-moving contextual facts |
+
+#### Bootstrap examples
+
+```bash
+# Persona — set once at agent initialization
+am ingest facet persona.tone "warm, direct, and concise" --layer identity --confidence 1.0
+am ingest facet persona.style "uses bullet points for lists; avoids jargon" --layer identity --confidence 1.0
+am ingest facet persona.role "personal assistant" --layer identity --confidence 1.0
+am ingest facet persona.name "Aria" --layer identity --confidence 1.0  # optional agent name
+
+# User relationship — fill in from onboarding or profile
+am ingest facet relationship.user.name "Alice" --layer identity --confidence 1.0
+am ingest facet relationship.user.timezone "America/New_York" --layer identity --confidence 1.0
+am ingest facet relationship.user.preferred_language "English" --layer identity --confidence 1.0
+am ingest facet relationship.user.communication_style "direct; prefers brevity" --layer identity --confidence 0.9
+am ingest facet relationship.user.affect "positive" --layer identity --confidence 0.7
+
+# World context
+am ingest facet world.user.role "product manager" --layer identity --confidence 0.9
+am ingest facet world.org "Acme Corp" --layer identity --confidence 1.0
+
+# Runtime — updated during operation
+am ingest facet runtime.mode "assistant" --layer runtime --confidence 1.0
+am ingest facet runtime.current_task "none" --layer runtime --confidence 1.0
+```
+
+#### Querying facets
+
+```bash
+# All persona facets
+am retrieve facets --tenant myagent --prefix persona.
+
+# Everything about the user relationship
+am retrieve facets --tenant myagent --prefix relationship.user.
+
+# Only identity-layer facets
+am retrieve facets --tenant myagent --layer identity
+```
+
+Facets are embedded to pgvector alongside evidence — `am retrieve semantic` will surface them when they match the query.
+
+Facets support prefix queries: `am retrieve facets --prefix persona.` returns all persona facets.
 
 ### Knowledge graph (triplets)
 

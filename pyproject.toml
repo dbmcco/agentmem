@@ -4,9 +4,7 @@ version = "0.1.0"
 description = "A generic, pluggable agent memory system"
 license = { text = "MIT" }
 requires-python = ">=3.12"
-authors = [
-    { name = "Braydon McCormick" },
-]
+authors = []
 dependencies = [
     "psycopg[binary]>=3.1",
     "psycopg-pool>=3.1",
