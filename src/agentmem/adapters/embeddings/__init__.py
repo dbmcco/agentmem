@@ -1,2 +1,6 @@
-# ABOUTME: Embedding service adapters for vector generation.
-# ABOUTME: OpenAI, Ollama, and other embedding provider implementations.
+# ABOUTME: Embedding adapter implementations.
+# ABOUTME: HashEmbeddingProvider and future backends (Ollama, OpenAI).
+
+from .hash import HashEmbeddingProvider
+
+__all__ = ["HashEmbeddingProvider"]

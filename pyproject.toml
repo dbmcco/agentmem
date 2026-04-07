@@ -2,7 +2,6 @@
 name = "agentmem"
 version = "0.1.0"
 description = "A generic, pluggable agent memory system"
-readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
 authors = [
@@ -29,6 +28,9 @@ cli = [
 all = [
     "agentmem[ollama,openai,service,cli]",
 ]
+
+[project.scripts]
+am = "agentmem.cli.commands.main:main"
 
 [build-system]
 requires = ["hatchling"]

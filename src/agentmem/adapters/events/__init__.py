@@ -1,2 +1,6 @@
-# ABOUTME: Event system adapters for notifications and triggers.
-# ABOUTME: PostgreSQL LISTEN/NOTIFY, webhook, and other event implementations.
+# ABOUTME: Event bus adapter implementations.
+# ABOUTME: Provides LocalEventBus for in-process pub/sub event distribution.
+
+from .local import LocalEventBus
+
+__all__ = ["LocalEventBus"]

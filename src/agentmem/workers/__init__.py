@@ -1,2 +1,6 @@
-# ABOUTME: Background worker system for agentmem operations.
-# ABOUTME: Coordinator and job scheduling for embedding, digestion, and maintenance tasks.
+# ABOUTME: Background worker layer for agentmem.
+# ABOUTME: Exports the WorkerCoordinator for managing async jobs like embedding and retention.
+
+from .coordinator import WorkerCoordinator
+
+__all__ = ["WorkerCoordinator"]
