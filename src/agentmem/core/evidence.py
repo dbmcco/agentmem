@@ -1,46 +1,81 @@
-# ABOUTME: EvidenceLedger domain service — append-only evidence ingestion and retrieval.
-# ABOUTME: Wraps EvidenceStoreAdapter and EmbeddingAdapter; auto-embeds on ingest.
-
+# ABOUTME: EvidenceLedger domain service.
+# ABOUTME: Accepts protocol-typed adapters only — no concrete imports. Handles dedup and optional embedding.
+"""EvidenceLedger: domain service for evidence ingestion and retrieval."""
 from __future__ import annotations
 
-from .models import EvidenceRecord, InsertResult, EvidenceFilters, VectorRecord
-from .protocols import EvidenceStoreAdapter, VectorStoreAdapter, EmbeddingAdapter
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agentmem.core.models import (
+        EvidenceFilters,
+        EvidenceRecord,
+        InsertResult,
+    )
+    from agentmem.core.protocols import EvidenceStore, VectorStore, EmbeddingAdapter
+    from agentmem.core.embeddings import EmbeddingService
 
 
 class EvidenceLedger:
+    """Manages evidence ingestion (with dedup) and retrieval.
+
+    Ingest flow:
+      1. Insert record into EvidenceStore (returns InsertResult with deduplicated flag).
+      2. If not deduplicated AND embedding provided on record → store to VectorStore immediately.
+      3. If not deduplicated AND no embedding → EmbeddingService computes and stores asynchronously
+         (or caller can defer to EmbedReindexJob).
+
+    The embedding field on EvidenceRecord is NEVER stored on the evidence row itself.
+    It is only routed to VectorStore.
+    """
+
     def __init__(
         self,
-        store: EvidenceStoreAdapter,
-        vector_store: VectorStoreAdapter | None = None,
-        embedding: EmbeddingAdapter | None = None,
+        store: EvidenceStore,
+        vector_store: VectorStore | None = None,
+        embedding_service: EmbeddingService | EmbeddingAdapter | None = None,
     ) -> None:
         self._store = store
         self._vector_store = vector_store
-        self._embedding = embedding
+        self._embedding_service = embedding_service
 
     async def ingest(self, record: EvidenceRecord) -> InsertResult:
-        # 1. Use pre-computed embedding if provided
-        embedding = record.embedding
+        """Insert evidence record. Handles dedup, routes embedding to VectorStore.
 
-        # 2. Auto-embed if service available and no pre-computed embedding
-        if embedding is None and self._embedding:
-            embedding = await self._embedding.embed(record.content)
-
-        # 3. Insert evidence (dedupe on dedupe_key)
+        Returns InsertResult with deduplicated=True if dedupe_key already exists.
+        """
         result = await self._store.insert(record)
 
-        # 4. Store embedding in VectorStore (if we have one and insert succeeded)
-        if not result.deduplicated and embedding and self._vector_store and result.id:
-            await self._vector_store.store(VectorRecord(
-                tenant_id=record.tenant_id,
-                source_table='evidence',
-                source_id=result.id,
-                model_id=self._embedding.model_id if self._embedding else 'provided',
-                embedding=embedding,
-                collection='evidence',
-            ))
+        # Only process embeddings if record was not deduplicated and we have a vector store
+        if not result.deduplicated and self._vector_store is not None:
+            from agentmem.core.models import VectorRecord
+
+            embedding = None
+            model_id = None
+
+            if record.embedding is not None:
+                # Use precomputed embedding
+                embedding = record.embedding
+                model_id = "provided"
+            elif self._embedding_service is not None:
+                # Generate new embedding
+                embedding = await self._embedding_service.embed(record.content)
+                if embedding is not None:
+                    model_id = self._embedding_service.model_id
+
+            # Store vector if we have an embedding
+            if embedding is not None and model_id is not None:
+                vr = VectorRecord(
+                    tenant_id=record.tenant_id,
+                    source_table='evidence',
+                    source_id=result.id,
+                    model_id=model_id,
+                    embedding=embedding,
+                    collection='evidence'
+                )
+                await self._vector_store.store(vr)
 
         return result
 
     async def query(self, filters: EvidenceFilters) -> list[EvidenceRecord]:
+        """Query evidence records matching filters."""
         return await self._store.query(filters)

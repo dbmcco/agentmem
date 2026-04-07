@@ -1,6 +1,9 @@
-# ABOUTME: Embedding adapter implementations.
-# ABOUTME: HashEmbeddingProvider and future backends (Ollama, OpenAI).
+# ABOUTME: Export embeddings adapters for easy importing.
+"""Embeddings adapters."""
 
-from .hash import HashEmbeddingProvider, HashEmbeddingAdapter
+from .hash import HashEmbeddingAdapter
 
-__all__ = ["HashEmbeddingProvider", "HashEmbeddingAdapter"]
+# For backward compatibility with existing tests
+HashEmbeddingProvider = HashEmbeddingAdapter
+
+__all__ = ["HashEmbeddingAdapter", "HashEmbeddingProvider"]

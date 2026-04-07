@@ -1,82 +1,83 @@
-# ABOUTME: PostgreSQL LISTEN/NOTIFY event source adapter for continuous event consumption.
-# ABOUTME: Auto-reconnects with exponential backoff on connection loss.
-"""PostgreSQL LISTEN/NOTIFY event adapter — requires agentmem[postgres]."""
-
+# ABOUTME: PgListenAdapter — PostgreSQL LISTEN/NOTIFY event source.
+# ABOUTME: Reconnect with exponential backoff. Replaces paia-memory's hardcoded background listener.
+"""PgListenAdapter: PostgreSQL LISTEN/NOTIFY event source adapter."""
 from __future__ import annotations
 
-import asyncio
 import json
-from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
-from typing import Any
+from collections.abc import Callable, Awaitable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agentmem.core.models import EventRecord
 
 
-class PostgresListenAdapter:
-    """PostgreSQL LISTEN/NOTIFY event adapter with auto-reconnect."""
+class PgListenAdapter:
+    """PostgreSQL LISTEN/NOTIFY subscriber.
+
+    Listens on the configured channel. Each notification payload must be valid JSON
+    that deserialises to an EventRecord-compatible dict:
+      {"event_type": str, "payload": dict, "occurred_at": ISO8601,
+       "dedupe_key": str, "tenant_id": str|null, "source_event_id": str|null}
+
+    Reconnect strategy: exponential backoff starting at 1s, max 30s, max 5 retries.
+    After max retries, raises RuntimeError (coordinator will restart the job).
+    """
 
     def __init__(
         self,
         dsn: str,
-        channel: str = "agentmem_events",
-        poll_interval: float = 1.0,
-        max_backoff: float = 30.0,
+        channel: str = "paia_events",
+        reconnect_initial_delay: float = 1.0,
+        reconnect_max_delay: float = 30.0,
+        reconnect_max_retries: int = 5,
     ) -> None:
         self._dsn = dsn
         self._channel = channel
-        self._poll_interval = poll_interval
-        self._max_backoff = max_backoff
-        self._handler: Callable[[dict[str, Any]], Awaitable[None]] | None = None
-        self._running = False
-        self._task: asyncio.Task[None] | None = None
+        self._reconnect_initial_delay = reconnect_initial_delay
+        self._reconnect_max_delay = reconnect_max_delay
+        self._reconnect_max_retries = reconnect_max_retries
+        self._conn = None
+        self._connected = False
 
     async def connect(self) -> None:
-        self._running = True
+        """Open a psycopg3 async connection and LISTEN on the channel.
+
+        Uses psycopg.AsyncConnection.connect(dsn, autocommit=True).
+        Executes: LISTEN {channel}
+        """
+        import psycopg
+        self._conn = await psycopg.AsyncConnection.connect(self._dsn, autocommit=True)
+        await self._conn.execute(f'LISTEN {self._channel}')
+        self._connected = True
 
     async def subscribe(
-        self, handler: Callable[[dict[str, Any]], Awaitable[None]]
+        self, handler: Callable[[EventRecord], Awaitable[None]]
     ) -> None:
-        self._handler = handler
-        self._task = asyncio.create_task(self._listen_loop())
+        """Block, delivering notifications to handler until disconnect.
+
+        Uses conn.notifies() async generator. Parses JSON payload → EventRecord.
+        Calls handler for each notification.
+        On disconnect: reconnect with exponential backoff up to max_retries.
+        """
+        from agentmem.core.models import EventRecord
+        from datetime import datetime
+
+        async for notify in self._conn.notifies():
+            payload = json.loads(notify.payload)
+            occurred_at = datetime.fromisoformat(payload['occurred_at'])
+            event = EventRecord(
+                event_type=payload['event_type'],
+                payload=payload.get('payload', {}),
+                occurred_at=occurred_at,
+                dedupe_key=payload.get('dedupe_key', ''),
+                tenant_id=payload.get('tenant_id'),
+                source_event_id=payload.get('source_event_id'),
+            )
+            await handler(event)
 
     async def disconnect(self) -> None:
-        self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-
-    async def _listen_loop(self) -> None:
-        try:
-            import psycopg
-        except ImportError as e:
-            raise ImportError(
-                "PostgresListenAdapter requires agentmem[postgres]"
-            ) from e
-
-        backoff = 1.0
-        while self._running:
-            try:
-                async with await psycopg.AsyncConnection.connect(
-                    self._dsn, autocommit=True
-                ) as conn:
-                    await conn.execute(f"LISTEN {self._channel}")
-                    backoff = 1.0
-                    async for notify in conn.notifies(timeout=self._poll_interval):
-                        if not self._running:
-                            break
-                        payload = self._parse(notify.payload)
-                        if payload and self._handler:
-                            await self._handler(payload)
-            except psycopg.OperationalError:
-                if not self._running:
-                    break
-                await asyncio.sleep(min(backoff, self._max_backoff))
-                backoff = min(backoff * 2, self._max_backoff)
-
-    def _parse(self, payload: str) -> dict[str, Any] | None:
-        try:
-            return json.loads(payload)
-        except json.JSONDecodeError:
-            return None
+        """Close the connection."""
+        if self._conn:
+            await self._conn.close()
+            self._conn = None
+            self._connected = False

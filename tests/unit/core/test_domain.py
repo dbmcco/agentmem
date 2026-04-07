@@ -260,15 +260,16 @@ async def test_digest_generate_and_list(mem_adapter, hash_adapter):
     evidence = EvidenceLedger(mem_adapter, mem_adapter, None)
     digests = DigestEngine(mem_adapter, mem_adapter)
 
-    start_time = datetime.now(timezone.utc)
-    end_time = start_time.replace(hour=23, minute=59, second=59)
+    now = datetime.now(timezone.utc)
+    start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_time = now.replace(hour=23, minute=59, second=59, microsecond=0)
 
     # Insert some evidence records
     record1 = EvidenceRecord(
         tenant_id="test-tenant",
         event_type="message",
         content="Morning message",
-        occurred_at=start_time,
+        occurred_at=start_time.replace(hour=8),
         source_event_id="msg-1",
         dedupe_key="digest-key-1"
     )

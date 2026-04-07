@@ -1,61 +1,73 @@
-# ABOUTME: Webhook event source adapter for receiving HTTP push events.
-# ABOUTME: Receives events via POST endpoint, optionally exposes a FastAPI router.
-"""Webhook event source adapter for receiving HTTP push events."""
-
+# ABOUTME: WebhookAdapter — HTTP push receiver for incoming events.
+# ABOUTME: FastAPI router that accepts POST /events, validates payload, calls handler.
+"""WebhookAdapter: HTTP webhook event source adapter."""
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import Any
+from collections.abc import Callable, Awaitable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agentmem.core.models import EventRecord
 
 
-class WebhookEventSourceAdapter:
-    """HTTP webhook event source adapter — receives pushed events via POST endpoint."""
+class WebhookAdapter:
+    """HTTP webhook event source adapter.
 
-    def __init__(self, path: str = "/webhooks/events") -> None:
-        self._path = path
-        self._handler: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+    Provides a FastAPI APIRouter (mount_router()) that receives POST requests.
+    Event payload format (JSON body):
+      {"event_type": str, "payload": dict, "occurred_at": ISO8601,
+       "dedupe_key": str, "tenant_id": str|null, "source_event_id": str|null}
+
+    Usage:
+        adapter = WebhookAdapter(mount_path="/webhooks/events")
+        await adapter.connect()
+        await adapter.subscribe(handler)   # non-blocking; handler called per POST
+        app.include_router(adapter.router)
+    """
+
+    def __init__(self, mount_path: str = "/webhooks/events") -> None:
+        from fastapi import APIRouter, Request
+        self._mount_path = mount_path
+        self._handler = None
+        self._router = APIRouter()
+
+        @self._router.post(mount_path)
+        async def receive_event(request: Request):
+            from agentmem.core.models import EventRecord
+            import json
+            from datetime import datetime
+            body = await request.json()
+            occurred_at = datetime.fromisoformat(body['occurred_at'])
+            event = EventRecord(
+                event_type=body['event_type'],
+                payload=body.get('payload', {}),
+                occurred_at=occurred_at,
+                dedupe_key=body.get('dedupe_key', ''),
+                tenant_id=body.get('tenant_id'),
+                source_event_id=body.get('source_event_id'),
+            )
+            if self._handler:
+                await self._handler(event)
+            return {'status': 'ok'}
+
+    @property
+    def router(self):  # -> fastapi.APIRouter
+        """FastAPI router to mount into the service app."""
+        return self._router
 
     async def connect(self) -> None:
-        """No-op for HTTP adapter."""
+        """No-op for webhook (connection is inbound). Required by EventSourceAdapter protocol."""
+        pass
 
-    async def subscribe(self, handler: Callable[[dict[str, Any]], Awaitable[None]]) -> None:
+    async def subscribe(
+        self, handler: Callable[[EventRecord], Awaitable[None]]
+    ) -> None:
+        """Register the handler called for each incoming webhook POST.
+
+        Non-blocking — the handler is called from the FastAPI route handler.
+        """
         self._handler = handler
 
     async def disconnect(self) -> None:
-        self._handler = None
-
-    def as_router(self):
-        """Returns a FastAPI router with POST endpoint that calls self._handler."""
-        from fastapi import APIRouter, Request
-        router = APIRouter()
-
-        @router.post(self._path)
-        async def receive(request: Request):
-            data = await request.json()
-            records = data.get('records', [data])  # support both batch and single
-            for record in records:
-                event = self._normalize(record)
-                if self._handler and event:
-                    await self._handler(event)
-            return {'status': 'ingested'}
-
-        return router
-
-    def _normalize(self, data: dict[str, Any]):
-        """Handle both full EventEnvelope and slim push-delivery format."""
-        try:
-            # Check for required fields
-            event_type = data['event_type']
-            payload = data.get('payload', {})
-
-            # Basic validation passed, return data for handler
-            return {
-                'event_type': event_type,
-                'payload': payload,
-                'occurred_at': data.get('occurred_at') or data.get('timestamp'),
-                'dedupe_key': data.get('dedupe_key') or data.get('event_id', ''),
-                'tenant_id': data.get('tenant_id'),
-                'source_event_id': data.get('source_event_id') or data.get('event_id'),
-            }
-        except (KeyError, ValueError):
-            return None
+        """No-op. Required by EventSourceAdapter protocol."""
+        pass

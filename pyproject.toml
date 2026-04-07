@@ -30,7 +30,7 @@ all = [
 ]
 
 [project.scripts]
-am = "agentmem.cli.commands.main:main"
+am = "agentmem.cli.main:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -45,6 +45,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
     "mypy>=1.9",
+    "croniter>=2.0",
 ]
 
 [tool.pytest.ini_options]

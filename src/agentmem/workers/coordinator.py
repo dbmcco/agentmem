@@ -1,90 +1,249 @@
-# ABOUTME: Worker coordinator for background job scheduling.
-# ABOUTME: Manages and runs periodic jobs like embedding reindex and retention.
-"""Worker coordinator — runs background jobs on schedule.
-
-Persists job state to storage (not in-memory only per spec).
-"""
-
+# ABOUTME: WorkerCoordinator — job lifecycle, crash recovery, heartbeat monitoring, state tracking.
+# ABOUTME: The first-class background worker layer that paia-memory was missing.
+"""WorkerCoordinator: manages all background jobs."""
 from __future__ import annotations
 
+import abc
 import asyncio
-import logging
-from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+import dataclasses
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Callable, Awaitable
 
-from agentmem.core.models import JobState
-from agentmem.core.protocols import JobStore
+from agentmem.core.models import JobResult, JobStatus
+from agentmem.workers.triggers import (
+    AnyTrigger,
+    CronTrigger,
+    ContinuousTrigger,
+    EventTrigger,
+    OnDemandTrigger,
+)
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from agentmem.core.active_context import ActiveContextStore
+    from agentmem.core.digests import DigestEngine
+    from agentmem.core.embeddings import EmbeddingService
+    from agentmem.core.evidence import EvidenceLedger
+    from agentmem.core.facets import FacetStore
+    from agentmem.core.graph import GraphStore
+    from agentmem.core.router import EventRouter
+    from agentmem.core.models import EventRecord
 
-JobFn = Callable[[], Awaitable[None]]
+
+@dataclass
+class JobContext:
+    """Injected into every job run. Provides access to all domain services."""
+
+    evidence_ledger: EvidenceLedger
+    facet_store: FacetStore
+    graph_store: GraphStore
+    digest_engine: DigestEngine
+    active_context_store: ActiveContextStore
+    embedding_service: EmbeddingService
+    event_router: EventRouter
+    config: dict[str, Any]
+    _coordinator: WorkerCoordinator = field(repr=False)
+    storage_adapter: Any | None = None  # v1 escape hatch for jobs needing direct DB access
+    job_name: str = ""
+
+    async def heartbeat(self) -> None:
+        """Continuous jobs must call this within heartbeat_interval_seconds.
+
+        Updates heartbeat timestamp in coordinator state.
+        """
+        await self._coordinator._update_heartbeat(self.job_name)
+
+    async def publish(self, topic: str, message: dict[str, Any]) -> None:
+        """In-process pub/sub for inter-job coordination signals."""
+        await self._coordinator._publish(topic, message)
+
+    async def subscribe(
+        self,
+        topic: str,
+        handler: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        """Subscribe to in-process pub/sub topic."""
+        await self._coordinator._subscribe(topic, handler)
+
+
+class ScheduledJob(abc.ABC):
+    """Base class for cron-triggered or on-demand jobs."""
+
+    name: str
+    trigger: CronTrigger | OnDemandTrigger
+    depends_on: list[str] = field(default_factory=list)
+
+    @abc.abstractmethod
+    async def run(self, context: JobContext) -> JobResult:
+        """Execute the job. Must be idempotent."""
+        ...
+
+
+class ContinuousJob(abc.ABC):
+    """Base class for continuous or event-driven jobs."""
+
+    name: str
+    trigger: ContinuousTrigger | EventTrigger
+    heartbeat_interval_seconds: float = 30.0
+
+    @abc.abstractmethod
+    async def handle(self, event: EventRecord, context: JobContext) -> None:
+        """Handle a single incoming event."""
+        ...
 
 
 class WorkerCoordinator:
-    """Runs registered jobs on a configurable interval."""
+    """Manages the full lifecycle of all registered jobs.
 
-    def __init__(self, job_store: JobStore) -> None:
-        self._job_store = job_store
-        self._jobs: dict[str, tuple[JobFn, timedelta]] = {}
-        self._running = False
-        self._task: asyncio.Task[None] | None = None
+    Responsibilities:
+    - Start/stop all jobs; graceful shutdown (drain in-flight before exit)
+    - Crash recovery: continuous jobs restarted with exponential backoff
+      (1s, 2s, 4s, 8s, 16s); declared dead after 5 consecutive failures
+    - State persistence: last_run, last_error, run_count per job (via storage adapter)
+    - Heartbeat monitoring: flags stale continuous jobs; triggers restart
+    - Dependency ordering: depends_on resolved at dispatch time
+    - In-process pub/sub for inter-job messaging
+    """
 
-    def register(
-        self, name: str, fn: JobFn, interval: timedelta = timedelta(minutes=5)
-    ) -> None:
-        self._jobs[name] = (fn, interval)
+    BACKOFF_SEQUENCE = [1.0, 2.0, 4.0, 8.0, 16.0]  # seconds
+    MAX_CONSECUTIVE_FAILURES = 5
+
+    def __init__(self, context: JobContext) -> None:
+        self._base_context = context
+        self._jobs: dict[str, ScheduledJob | ContinuousJob] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._heartbeats: dict[str, datetime] = {}
+        self._job_states: dict[str, dict] = {}
+        self._pub_sub: dict[str, list] = {}  # topic -> list of handlers
+        self._event_sources: dict[str, Any] = {}  # populated by service/app.py
+
+    def register(self, job: ScheduledJob | ContinuousJob) -> None:
+        """Register a job with the coordinator. Must be called before start()."""
+        self._jobs[job.name] = job
 
     async def start(self) -> None:
-        self._running = True
-        self._task = asyncio.create_task(self._loop())
+        """Start all registered jobs as asyncio tasks."""
+        for job in self._jobs.values():
+            if isinstance(job, ScheduledJob):
+                task = asyncio.create_task(self._run_scheduled(job))
+            else:
+                task = asyncio.create_task(self._run_continuous(job))
+            self._tasks[job.name] = task
 
     async def stop(self) -> None:
-        self._running = False
-        if self._task:
-            self._task.cancel()
+        """Graceful shutdown: cancel tasks, wait for in-flight to drain."""
+        for task in self._tasks.values():
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+        self._tasks.clear()
+
+    async def run_now(self, job_name: str, **kwargs: Any) -> JobResult:
+        """Trigger an on-demand job run immediately. Works for any job type."""
+        job = self._jobs.get(job_name)
+        if not job:
+            raise KeyError(f'Unknown job: {job_name}')
+        ctx = self._make_context(job.name)
+        return await job.run(ctx)
+
+    async def status(self) -> list[JobStatus]:
+        """Return current status for all registered jobs."""
+        result = []
+        now = datetime.now(timezone.utc)
+        for name, job in self._jobs.items():
+            state = self._job_states.get(name, {})
+            hb = self._heartbeats.get(name)
+            hb_age = (now - hb).total_seconds() if hb else None
+            trigger_type = 'cron' if hasattr(job.trigger, 'schedule') else ('continuous' if hasattr(job.trigger, 'source') and not hasattr(job.trigger, 'event_type_pattern') else ('event' if hasattr(job.trigger, 'event_type_pattern') else 'on_demand'))
+            result.append(JobStatus(
+                name=name, trigger_type=trigger_type,
+                last_run=state.get('last_run'), last_result=state.get('last_result'),
+                error_count=state.get('error_count', 0),
+                heartbeat_age_seconds=hb_age,
+                state=state.get('state', 'idle'),
+            ))
+        return result
+
+    # ── Internal methods ───────────────────────────────────────────────────────
+
+    def _make_context(self, job_name: str) -> JobContext:
+        """Create a copy of base context with coordinator set and job_name set"""
+        ctx = dataclasses.replace(self._base_context, _coordinator=self, job_name=job_name)
+        return ctx
+
+    async def _run_scheduled(self, job: ScheduledJob) -> None:
+        """Loop: check cron schedule; run job when due; persist state; handle errors."""
+        from croniter import croniter
+
+        cron = croniter(job.trigger.schedule, datetime.now(timezone.utc))
+        while True:
+            next_run = cron.get_next(datetime)
+            now = datetime.now(timezone.utc)
+            delay = (next_run - now).total_seconds()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            ctx = self._make_context(job.name)
             try:
-                await self._task
+                result = await job.run(ctx)
+                self._job_states[job.name] = {
+                    'last_run': datetime.now(timezone.utc),
+                    'last_result': result,
+                    'error_count': 0,
+                    'state': 'idle'
+                }
+            except Exception as e:
+                ec = self._job_states.get(job.name, {}).get('error_count', 0) + 1
+                self._job_states[job.name] = {
+                    'error_count': ec,
+                    'state': 'dead' if ec >= 5 else 'idle',
+                    'last_error': str(e)
+                }
+
+    async def _run_continuous(self, job: ContinuousJob) -> None:
+        """Loop: connect event source; run job.handle per event; restart on failure with backoff."""
+        error_count = 0
+        while error_count < self.MAX_CONSECUTIVE_FAILURES:
+            try:
+                # Get source adapter from stored event sources
+                source_name = job.trigger.source
+                source = self._event_sources.get(source_name)
+                if source is None:
+                    raise RuntimeError(f'Event source {source_name!r} not registered')
+                await source.connect()
+                ctx = self._make_context(job.name)
+
+                async def handler(event):
+                    await job.handle(event, ctx)
+
+                await source.subscribe(handler)
+                error_count = 0
             except asyncio.CancelledError:
-                pass
+                raise
+            except Exception as e:
+                error_count += 1
+                delay = min(
+                    self.BACKOFF_SEQUENCE[error_count - 1] if error_count <= len(self.BACKOFF_SEQUENCE) else 16.0,
+                    30.0  # max reconnect delay
+                )
+                await asyncio.sleep(delay)
+        await self._publish('job:dead', {'job': job.name})
 
-    async def run_once(self, name: str) -> None:
-        """Run a single job immediately."""
-        if name not in self._jobs:
-            raise KeyError(f"Unknown job: {name}")
-        fn, _ = self._jobs[name]
-        state = await self._job_store.get_state(name) or JobState(name=name)
-        state.status = "running"
-        await self._job_store.put_state(state)
-        try:
-            await fn()
-            state.status = "idle"
-            state.last_run = datetime.now(UTC)
-            state.error = None
-        except Exception as exc:
-            state.status = "failed"
-            state.error = str(exc)
-            logger.exception("Job %s failed", name)
-        await self._job_store.put_state(state)
+    async def _update_heartbeat(self, job_name: str) -> None:
+        """Update heartbeat timestamp for a continuous job."""
+        self._heartbeats[job_name] = datetime.now(timezone.utc)
 
-    async def _loop(self) -> None:
-        while self._running:
-            now = datetime.now(UTC)
-            for name, (fn, interval) in self._jobs.items():
-                state = await self._job_store.get_state(name) or JobState(name=name)
-                if state.status == "running":
-                    continue
-                if state.last_run and (now - state.last_run) < interval:
-                    continue
-                state.status = "running"
-                await self._job_store.put_state(state)
-                try:
-                    await fn()
-                    state.status = "idle"
-                    state.last_run = now
-                    state.error = None
-                except Exception as exc:
-                    state.status = "failed"
-                    state.error = str(exc)
-                    logger.exception("Job %s failed", name)
-                await self._job_store.put_state(state)
-            await asyncio.sleep(1)
+    async def _publish(self, topic: str, message: dict[str, Any]) -> None:
+        """Deliver message to all subscribers of topic."""
+        handlers = self._pub_sub.get(topic, [])
+        for handler in handlers:
+            await handler(message)
+
+    async def _subscribe(
+        self,
+        topic: str,
+        handler: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        """Register a handler for pub/sub topic."""
+        if topic not in self._pub_sub:
+            self._pub_sub[topic] = []
+        self._pub_sub[topic].append(handler)

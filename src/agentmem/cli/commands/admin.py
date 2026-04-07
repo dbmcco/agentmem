@@ -80,3 +80,20 @@ def admin_stats(tenant: str = _TENANT_OPTION, url: str = _URL_OPTION) -> None:
 
     result = _get(f"{url}/admin/stats", params)
     typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@app.command("workers-status")
+def workers_status(url: str = _URL_OPTION) -> None:
+    """Show worker job statuses."""
+    result = _get(f"{url}/workers/status", {})
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@app.command("workers-run")
+def workers_run(
+    job_name: str = typer.Argument(..., help="Job name to run"),
+    url: str = _URL_OPTION,
+) -> None:
+    """Trigger an on-demand worker job run."""
+    result = _post(f"{url}/workers/run/{job_name}", {})
+    typer.echo(json.dumps(result, indent=2, default=str))
