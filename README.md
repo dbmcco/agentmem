@@ -43,6 +43,53 @@ agentmem provides the retrieval primitives. Context assembly — blending these 
 
 ---
 
+## How this differs from other approaches
+
+Most agent memory systems fall into one of two patterns: **conversation buffers** (keep recent turns, truncate when full) or **RAG over history** (embed everything, retrieve by similarity). Both work for simple cases. Neither handles the full range of what an agent actually needs to remember.
+
+### The core problem with monolithic memory
+
+When memory is a single bucket — whether a rolling buffer or a vector index — every retrieval decision is the same decision: *how similar is this to the current query?* That works for topic continuity. It fails for everything else.
+
+An agent that has had 10,000 conversations with you should still know your name without it having to "win" a cosine similarity contest against recent messages. It should know your preferred communication style unconditionally. It should know what happened in the conversation five minutes ago without vector search latency. And it should know what is happening *right now* without any historical retrieval at all.
+
+These are four fundamentally different memory problems. Solving them with a single mechanism means compromising all four.
+
+### What agentmem does instead
+
+**Identity is unconditional.** Facets — stable facts about the agent's persona and its relationship with the user — are retrieved as structured key-value data and injected first, without a similarity threshold. They cannot be crowded out by recent events. This is the most important architectural decision in the system.
+
+**Memory has layers, not just recency.** The retrieval architecture separates six distinct signals:
+
+- What the agent *is* (identity facets — unconditional)
+- What is happening *right now* (world state — live, event-driven)
+- What was *just said* (recent turns — verbatim, recency-ordered)
+- What was said *some time ago, compressed* (rolling digests — time-structured)
+- What is *relevant to this specific query* (semantic recall — similarity-gated)
+- What is *factually known* about entities in play (graph recall — relationship-structured)
+
+Each lane answers a different question. Collapsing them into one loses the distinction.
+
+**Context assembly is the caller's job.** agentmem does not inject context into prompts automatically. It does not decide how much weight to give identity vs. recent turns vs. semantic recall. That decision belongs to the agent or runtime — it depends on the query type, the persona, the token budget, and factors the library cannot know. This is a constraint that forces good architecture upstream.
+
+**Memory maintenance is deterministic.** Background jobs handle embedding backfill, digest generation, and retention pruning on schedule. No LLM is required to manage memory. Digests are deterministic concatenations — not AI summaries — which makes them cheap, predictable, and auditable. (LLM-generated rollup summarization is a planned v2 feature for callers who want it.)
+
+**Confidence is first-class.** Facets carry a confidence score (0.0–1.0). A fact the agent learned from explicit user input (confidence 1.0) is different from a fact inferred from behavioral patterns (confidence 0.7). This lets downstream logic weight or filter facts by certainty rather than treating all memory as equally reliable.
+
+### Compared to specific systems
+
+| System | What it does well | What agentmem adds |
+|---|---|---|
+| **LangChain memory** | Simple conversation buffer / summary chain | Structured facet identity, graph layer, multi-lane retrieval, background workers |
+| **MemGPT** | LLM manages its own memory; paging in/out | Deterministic (no LLM for memory ops), explicit lane separation, pluggable adapters |
+| **Zep** | Turn storage + entity extraction + vector search | Identity facets, confidence scoring, turn-count triggers, full protocol-driven extensibility |
+| **mem0** | AI-extracted memory with dedup | Deterministic maintenance, identity layer, no inference required to store or retrieve |
+| **Plain RAG** | Similarity search over arbitrary text | All of the above |
+
+agentmem is not trying to replace systems that use LLMs to manage memory. It is an alternative philosophy: **give the agent precise, well-structured retrieval primitives and let it decide how to reason about them**, rather than using another model to summarize, extract, and manage memory on its behalf.
+
+---
+
 ## Context injection
 
 ### Philosophy
