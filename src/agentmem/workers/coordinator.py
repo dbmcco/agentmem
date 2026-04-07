@@ -17,6 +17,7 @@ from agentmem.workers.triggers import (
     ContinuousTrigger,
     EventTrigger,
     OnDemandTrigger,
+    TurnCountTrigger,
 )
 
 if TYPE_CHECKING:
@@ -116,6 +117,7 @@ class WorkerCoordinator:
         self._job_states: dict[str, dict] = {}
         self._pub_sub: dict[str, list] = {}  # topic -> list of handlers
         self._event_sources: dict[str, Any] = {}  # populated by service/app.py
+        self._turn_counters: dict[tuple[str, str, str], int] = {}  # (job_name, tenant_id, event_type) -> count
 
     def register(self, job: ScheduledJob | ContinuousJob) -> None:
         """Register a job with the coordinator. Must be called before start()."""
@@ -123,8 +125,33 @@ class WorkerCoordinator:
 
     async def start(self) -> None:
         """Start all registered jobs as asyncio tasks."""
+        # Wire up turn-count trigger subscription before starting jobs
+        turn_count_jobs = [
+            j for j in self._jobs.values()
+            if isinstance(j, ScheduledJob) and isinstance(j.trigger, TurnCountTrigger)
+        ]
+        if turn_count_jobs:
+            async def _on_evidence_inserted(message: dict[str, Any]) -> None:
+                tenant_id = message.get('tenant_id', '')
+                event_type = message.get('event_type', '')
+                for job in turn_count_jobs:
+                    trigger = job.trigger
+                    assert isinstance(trigger, TurnCountTrigger)
+                    if event_type != trigger.event_type:
+                        continue
+                    key = (job.name, tenant_id, event_type)
+                    self._turn_counters[key] = self._turn_counters.get(key, 0) + 1
+                    if self._turn_counters[key] >= trigger.count:
+                        self._turn_counters[key] = 0
+                        ctx = self._make_context(job.name)
+                        await job.run(ctx)
+
+            await self._subscribe('evidence:inserted', _on_evidence_inserted)
+
         for job in self._jobs.values():
             if isinstance(job, ScheduledJob):
+                if isinstance(job.trigger, TurnCountTrigger):
+                    continue  # handled by pub/sub, not cron loop
                 task = asyncio.create_task(self._run_scheduled(job))
             else:
                 task = asyncio.create_task(self._run_continuous(job))

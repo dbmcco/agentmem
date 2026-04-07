@@ -220,3 +220,99 @@ class TestEvidenceLedger:
 
         # Then
         evidence_store.query.assert_called_once_with(filters)
+
+    async def test_ingest_publishes_event_on_successful_insert(self, evidence_store):
+        """Publisher is called with evidence:inserted on non-deduplicated insert."""
+        publisher = AsyncMock()
+        ledger = EvidenceLedger(evidence_store, publisher=publisher)
+        evidence_store.insert.return_value = InsertResult(id=1, dedupe_key="d1", deduplicated=False)
+
+        evidence = EvidenceRecord(
+            tenant_id="t1", event_type="conversation.turn", content="hi",
+            occurred_at="2023-01-01T00:00:00", source_event_id="s1", dedupe_key="d1",
+        )
+        await ledger.ingest(evidence)
+
+        publisher.assert_called_once_with('evidence:inserted', {
+            'tenant_id': 't1', 'event_type': 'conversation.turn',
+        })
+
+    async def test_ingest_does_not_publish_on_deduplicated(self, evidence_store):
+        """Publisher is NOT called when the insert is deduplicated."""
+        publisher = AsyncMock()
+        ledger = EvidenceLedger(evidence_store, publisher=publisher)
+        evidence_store.insert.return_value = InsertResult(id=None, dedupe_key="d1", deduplicated=True)
+
+        evidence = EvidenceRecord(
+            tenant_id="t1", event_type="conversation.turn", content="hi",
+            occurred_at="2023-01-01T00:00:00", source_event_id="s1", dedupe_key="d1",
+        )
+        await ledger.ingest(evidence)
+
+        publisher.assert_not_called()
+
+    async def test_ingest_without_publisher_works(self, evidence_store):
+        """No publisher configured — ingest still works."""
+        ledger = EvidenceLedger(evidence_store)
+        evidence_store.insert.return_value = InsertResult(id=1, dedupe_key="d1", deduplicated=False)
+
+        evidence = EvidenceRecord(
+            tenant_id="t1", event_type="conversation.turn", content="hi",
+            occurred_at="2023-01-01T00:00:00", source_event_id="s1", dedupe_key="d1",
+        )
+        result = await ledger.ingest(evidence)
+        assert result.id == 1
+
+    async def test_query_with_metadata_contains_filter_returns_matching_records(self, mem_adapter):
+        # Given
+        from agentmem.core.evidence import EvidenceLedger
+        from datetime import datetime
+
+        ledger = EvidenceLedger(mem_adapter)
+
+        # Insert 3 evidence records with different metadata conversation_id values
+        record1 = EvidenceRecord(
+            tenant_id="test-tenant",
+            event_type="message",
+            content="First message",
+            occurred_at=datetime(2023, 1, 1, 12, 0, 0),
+            source_event_id="source-1",
+            dedupe_key="dedupe-1",
+            metadata={"conversation_id": "conv-1", "other_field": "value1"}
+        )
+
+        record2 = EvidenceRecord(
+            tenant_id="test-tenant",
+            event_type="message",
+            content="Second message",
+            occurred_at=datetime(2023, 1, 1, 12, 1, 0),
+            source_event_id="source-2",
+            dedupe_key="dedupe-2",
+            metadata={"conversation_id": "conv-2", "other_field": "value2"}
+        )
+
+        record3 = EvidenceRecord(
+            tenant_id="test-tenant",
+            event_type="message",
+            content="Third message",
+            occurred_at=datetime(2023, 1, 1, 12, 2, 0),
+            source_event_id="source-3",
+            dedupe_key="dedupe-3",
+            metadata={"conversation_id": "conv-1", "other_field": "value3"}
+        )
+
+        await ledger.ingest(record1)
+        await ledger.ingest(record2)
+        await ledger.ingest(record3)
+
+        # When - Query with metadata_contains filter
+        filters = EvidenceFilters(
+            tenant_id="test-tenant",
+            metadata_contains={"conversation_id": "conv-1"}
+        )
+        result = await ledger.query(filters)
+
+        # Then - Only records with conversation_id='conv-1' should be returned
+        assert len(result) == 2
+        assert all(r.metadata["conversation_id"] == "conv-1" for r in result)
+        assert {r.content for r in result} == {"First message", "Third message"}

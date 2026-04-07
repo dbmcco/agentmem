@@ -3,7 +3,7 @@
 """EvidenceLedger: domain service for evidence ingestion and retrieval."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, Awaitable
 
 if TYPE_CHECKING:
     from agentmem.core.models import (
@@ -33,10 +33,12 @@ class EvidenceLedger:
         store: EvidenceStore,
         vector_store: VectorStore | None = None,
         embedding_service: EmbeddingService | EmbeddingAdapter | None = None,
+        publisher: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self._store = store
         self._vector_store = vector_store
         self._embedding_service = embedding_service
+        self._publisher = publisher
 
     async def ingest(self, record: EvidenceRecord) -> InsertResult:
         """Insert evidence record. Handles dedup, routes embedding to VectorStore.
@@ -73,6 +75,12 @@ class EvidenceLedger:
                     collection='evidence'
                 )
                 await self._vector_store.store(vr)
+
+        if self._publisher and not result.deduplicated:
+            await self._publisher('evidence:inserted', {
+                'tenant_id': record.tenant_id,
+                'event_type': record.event_type,
+            })
 
         return result
 

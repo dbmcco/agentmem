@@ -8,7 +8,7 @@ import pytest
 
 from agentmem.core.models import JobResult, JobStatus
 from agentmem.workers.coordinator import JobContext, ScheduledJob, ContinuousJob, WorkerCoordinator
-from agentmem.workers.triggers import OnDemandTrigger, ContinuousTrigger
+from agentmem.workers.triggers import OnDemandTrigger, ContinuousTrigger, TurnCountTrigger, parse_trigger
 
 
 @dataclass
@@ -191,6 +191,127 @@ async def test_make_context_sets_job_name(mock_context):
 
     assert ctx.job_name == "my_job"
     assert ctx._coordinator is coordinator
+
+
+@dataclass
+class TurnCountJob(ScheduledJob):
+    """Mock job triggered by TurnCountTrigger."""
+
+    name: str = "turn_count_job"
+    trigger: TurnCountTrigger = field(default_factory=lambda: TurnCountTrigger(count=3))
+    run_count: int = 0
+
+    async def run(self, context: JobContext) -> JobResult:
+        self.run_count += 1
+        return JobResult(success=True, items_processed=1)
+
+
+async def test_turn_count_trigger_fires_after_n_events(mock_context):
+    """TurnCountTrigger fires the job after N matching evidence inserts."""
+    coordinator = WorkerCoordinator(mock_context)
+    job = TurnCountJob()
+    coordinator.register(job)
+
+    await coordinator.start()
+
+    # Publish 2 events — not enough to fire
+    for _ in range(2):
+        await coordinator._publish('evidence:inserted', {
+            'tenant_id': 't1', 'event_type': 'conversation.turn',
+        })
+    assert job.run_count == 0
+
+    # Third event should fire the job
+    await coordinator._publish('evidence:inserted', {
+        'tenant_id': 't1', 'event_type': 'conversation.turn',
+    })
+    assert job.run_count == 1
+
+    await coordinator.stop()
+
+
+async def test_turn_count_trigger_resets_after_fire(mock_context):
+    """Counter resets after firing, so it fires again at 2*N."""
+    coordinator = WorkerCoordinator(mock_context)
+    job = TurnCountJob()
+    coordinator.register(job)
+
+    await coordinator.start()
+
+    # Fire 6 events: should fire at 3 and 6
+    for _ in range(6):
+        await coordinator._publish('evidence:inserted', {
+            'tenant_id': 't1', 'event_type': 'conversation.turn',
+        })
+    assert job.run_count == 2
+
+    await coordinator.stop()
+
+
+async def test_turn_count_trigger_ignores_wrong_event_type(mock_context):
+    """Events with non-matching event_type don't increment counter."""
+    coordinator = WorkerCoordinator(mock_context)
+    job = TurnCountJob()
+    coordinator.register(job)
+
+    await coordinator.start()
+
+    for _ in range(5):
+        await coordinator._publish('evidence:inserted', {
+            'tenant_id': 't1', 'event_type': 'email.received',
+        })
+    assert job.run_count == 0
+
+    await coordinator.stop()
+
+
+async def test_turn_count_trigger_separate_tenants(mock_context):
+    """Each tenant has its own counter."""
+    coordinator = WorkerCoordinator(mock_context)
+    job = TurnCountJob()
+    coordinator.register(job)
+
+    await coordinator.start()
+
+    # 2 events for t1, 2 for t2 — neither hits threshold
+    for tid in ('t1', 't2'):
+        for _ in range(2):
+            await coordinator._publish('evidence:inserted', {
+                'tenant_id': tid, 'event_type': 'conversation.turn',
+            })
+    assert job.run_count == 0
+
+    # Third event for t1 — fires
+    await coordinator._publish('evidence:inserted', {
+        'tenant_id': 't1', 'event_type': 'conversation.turn',
+    })
+    assert job.run_count == 1
+
+    await coordinator.stop()
+
+
+def test_parse_trigger_turn_count_default_event_type():
+    """Parse 'turn_count:50' uses default event_type."""
+    trigger = parse_trigger('turn_count:50')
+    assert isinstance(trigger, TurnCountTrigger)
+    assert trigger.count == 50
+    assert trigger.event_type == 'conversation.turn'
+
+
+def test_parse_trigger_turn_count_custom_event_type():
+    """Parse 'turn_count:50:conversation.turn' uses specified event_type."""
+    trigger = parse_trigger('turn_count:50:conversation.turn')
+    assert isinstance(trigger, TurnCountTrigger)
+    assert trigger.count == 50
+    assert trigger.event_type == 'conversation.turn'
+
+
+def test_parse_trigger_turn_count_different_event_type():
+    """Parse 'turn_count:10:email.received' uses custom event_type."""
+    trigger = parse_trigger('turn_count:10:email.received')
+    assert isinstance(trigger, TurnCountTrigger)
+    assert trigger.count == 10
+    assert trigger.event_type == 'email.received'
 
 
 async def test_graceful_shutdown(mock_context):

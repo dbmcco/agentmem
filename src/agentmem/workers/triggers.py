@@ -34,8 +34,15 @@ class OnDemandTrigger:
     pass  # only runs when explicitly invoked via API/CLI
 
 
+@dataclass
+class TurnCountTrigger:
+    """Fire after every N evidence inserts for a tenant."""
+    count: int
+    event_type: str = 'conversation.turn'
+
+
 # Union type for type annotations
-AnyTrigger = CronTrigger | ContinuousTrigger | EventTrigger | OnDemandTrigger
+AnyTrigger = CronTrigger | ContinuousTrigger | EventTrigger | OnDemandTrigger | TurnCountTrigger
 
 
 def parse_trigger(trigger_string: str) -> AnyTrigger:
@@ -58,4 +65,9 @@ def parse_trigger(trigger_string: str) -> AnyTrigger:
                 f"event trigger must be 'event:<source>:<pattern>', got: {trigger_string!r}"
             )
         return EventTrigger(source=parts[0], event_type_pattern=parts[1])
+    if trigger_string.startswith("turn_count:"):
+        parts = trigger_string[len("turn_count:"):].split(":", 1)
+        count = int(parts[0])
+        event_type = parts[1] if len(parts) == 2 else 'conversation.turn'
+        return TurnCountTrigger(count=count, event_type=event_type)
     raise ValueError(f"unrecognised trigger string: {trigger_string!r}")
