@@ -2,8 +2,6 @@
 
 Generic pluggable agent memory library. Evidence ledger, facet store, knowledge graph, progressive digests, active context, and vector search — deployable as a FastAPI service, importable as a Python library, and accessible from the shell via the `am` CLI.
 
-Extracted from `paia-memory`. No paia coupling. Any agent can use it.
-
 ---
 
 ## What it does
