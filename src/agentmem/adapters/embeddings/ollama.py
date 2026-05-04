@@ -3,6 +3,8 @@
 """OllamaEmbeddingAdapter: httpx-based Ollama embedding client."""
 from __future__ import annotations
 
+from agentmem.model_routes import OLLAMA_EMBEDDING_ROUTE_ID, model_for_route
+
 
 class OllamaEmbeddingAdapter:
     """Embedding adapter for Ollama local inference server.
@@ -10,19 +12,19 @@ class OllamaEmbeddingAdapter:
     Calls POST {url}/api/embeddings with {"model": model, "prompt": text}.
     Returns None on connection error or timeout (graceful degradation).
 
-    Dimensions: determined by model. Default model qwen3-embedding:8b → 4096 dims.
+    Dimensions: determined by model. Default route resolves to a 4096-dim model.
     model_id: used to tag VectorRecord entries for model migration.
     """
 
     def __init__(
         self,
         url: str = "http://localhost:11434",
-        model: str = "qwen3-embedding:8b",
+        model: str | None = None,
         timeout: float = 30.0,
         dimensions: int = 4096,
     ) -> None:
         self._url = url
-        self._model = model
+        self._model = model if model is not None else model_for_route(OLLAMA_EMBEDDING_ROUTE_ID)
         self._timeout = timeout
         self._dimensions = dimensions
         self._client = None  # lazy init

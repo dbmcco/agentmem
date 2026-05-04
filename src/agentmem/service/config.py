@@ -6,6 +6,12 @@ from __future__ import annotations
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from agentmem.model_routes import OLLAMA_EMBEDDING_ROUTE_ID, model_for_route
+
+
+def _default_embedding_model() -> str:
+    return model_for_route(OLLAMA_EMBEDDING_ROUTE_ID)
+
 
 class StorageConfig(BaseSettings):
     backend: str = "postgres"
@@ -15,7 +21,7 @@ class StorageConfig(BaseSettings):
 class EmbeddingsConfig(BaseSettings):
     backend: str = "ollama"
     url: str = "http://localhost:11434"
-    model: str = "qwen3-embedding:8b"
+    model: str = Field(default_factory=_default_embedding_model)
     dimensions: int = 4096
 
 
