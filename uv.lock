@@ -14,6 +14,7 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
+    { name = "croniter" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "openai" },
@@ -23,6 +24,7 @@ all = [
     { name = "uvicorn", extra = ["standard"] },
 ]
 cli = [
+    { name = "httpx" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -33,6 +35,7 @@ openai = [
     { name = "openai" },
 ]
 service = [
+    { name = "croniter" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
     { name = "uvicorn", extra = ["standard"] },
@@ -50,7 +53,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "agentmem", extras = ["ollama", "openai", "service", "cli"], marker = "extra == 'all'" },
+    { name = "croniter", marker = "extra == 'service'", specifier = ">=2.0" },
     { name = "fastapi", marker = "extra == 'service'", specifier = ">=0.110" },
+    { name = "httpx", marker = "extra == 'cli'", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'ollama'", specifier = ">=0.27" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.30" },
     { name = "pgvector", specifier = ">=0.3" },

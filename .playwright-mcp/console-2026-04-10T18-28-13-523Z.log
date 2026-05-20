@@ -1,0 +1,3 @@
+[      25ms] Unexpected string
+[   26040ms] ReferenceError: sendAgentMessage is not defined
+    at HTMLButtonElement.onclick (http://localhost:8777/:5453:57)

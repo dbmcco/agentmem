@@ -1,0 +1,86 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - heading "Speedrift Ecosystem Hub" [level=1] [ref=e5]
+      - generic [ref=e6]: Loading ecosystem state…
+    - main [ref=e7]:
+      - navigation [ref=e8]:
+        - button "Operations" [ref=e9] [cursor=pointer]
+        - button "Intelligence" [ref=e10] [cursor=pointer]
+        - button "Conformance" [ref=e11] [cursor=pointer]
+        - button "Convergence" [ref=e12] [cursor=pointer]
+        - button "PlanForge" [ref=e13] [cursor=pointer]
+        - button "Factory" [ref=e14] [cursor=pointer]
+        - button "Sessions" [ref=e15] [cursor=pointer]
+        - button "Services" [ref=e16] [cursor=pointer]
+        - button "Daily Report" [ref=e17] [cursor=pointer]
+      - generic [ref=e18]:
+        - paragraph [ref=e20]: Loading ecosystem state...
+        - generic [ref=e21]:
+          - generic [ref=e22]:
+            - heading "Dependencies" [level=2] [ref=e23]
+            - generic [ref=e24]:
+              - button "-" [ref=e25] [cursor=pointer]
+              - button "+" [ref=e26] [cursor=pointer]
+              - button "reset" [ref=e27] [cursor=pointer]
+          - img [ref=e28]
+          - generic [ref=e29]: Loading repo dependency graph...
+          - generic [ref=e30]: Click a repo node to open its detail view.
+          - generic [ref=e31]:
+            - generic [ref=e32]: Done
+            - generic [ref=e34]: In progress
+            - generic [ref=e36]: Open
+            - generic [ref=e38]: Blocked
+        - generic [ref=e40]:
+          - generic [ref=e41]:
+            - button "Repos 0" [ref=e42] [cursor=pointer]:
+              - text: Repos
+              - generic [ref=e43]: "0"
+            - button "Activity" [ref=e44] [cursor=pointer]
+          - generic [ref=e45]:
+            - generic [ref=e46]:
+              - textbox "Search repos..." [ref=e47]
+              - combobox [ref=e48]:
+                - option "all roles" [selected]
+                - option "orchestrator"
+                - option "baseline"
+                - option "lane"
+                - option "product"
+              - combobox [ref=e49]:
+                - option "all status" [selected]
+                - option "active"
+                - option "idle"
+                - option "missing"
+              - combobox [ref=e50]:
+                - option "all drift" [selected]
+                - option "has drift"
+                - option "clean"
+              - combobox [ref=e51]:
+                - option "all health" [selected]
+                - option "risk"
+                - option "watch"
+                - option "healthy"
+              - combobox [ref=e52]:
+                - option "all tags" [selected]
+            - table [ref=e53]:
+              - rowgroup [ref=e54]:
+                - row "Repo ⇅ Role ⇅ Status Drift ⇅ Tasks ⇅ Trend Health ⇅ Last Changed ⇅ Last Ops ⇅" [ref=e55]:
+                  - columnheader "Repo ⇅" [ref=e56] [cursor=pointer]
+                  - columnheader "Role ⇅" [ref=e57] [cursor=pointer]
+                  - columnheader "Status" [ref=e58]
+                  - columnheader "Drift ⇅" [ref=e59] [cursor=pointer]
+                  - columnheader "Tasks ⇅" [ref=e60] [cursor=pointer]
+                  - columnheader "Trend" [ref=e61]
+                  - columnheader "Health ⇅" [ref=e62] [cursor=pointer]
+                  - columnheader "Last Changed ⇅" [ref=e63] [cursor=pointer]
+                  - columnheader "Last Ops ⇅" [ref=e64] [cursor=pointer]
+              - rowgroup
+  - generic [ref=e65]:
+    - generic [ref=e66]:
+      - generic [ref=e67]: ECOSYSTEM AGENT
+      - generic [ref=e68]:
+        - button "+ New" [ref=e69] [cursor=pointer]
+        - button "History" [ref=e70] [cursor=pointer]
+    - generic [ref=e72]:
+      - textbox "Ask the agent anything or give it work to do…" [ref=e73]
+      - button "Send" [ref=e74] [cursor=pointer]

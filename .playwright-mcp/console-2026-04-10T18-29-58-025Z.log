@@ -1,0 +1,5 @@
+[      18ms] Unexpected string
+[    8254ms] ReferenceError: toggleChatHistory is not defined
+    at HTMLButtonElement.onclick (http://localhost:8777/:5446:209)
+[   24575ms] ReferenceError: sendAgentMessage is not defined
+    at HTMLButtonElement.onclick (http://localhost:8777/:5453:57)
