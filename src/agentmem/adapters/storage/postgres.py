@@ -17,10 +17,11 @@ Schema (created by migrate(), idempotent):
         content     TEXT NOT NULL,
         occurred_at TIMESTAMPTZ NOT NULL,
         source_event_id TEXT,
-        dedupe_key  TEXT NOT NULL UNIQUE,
+        dedupe_key  TEXT NOT NULL,
         metadata    JSONB,
         channel_id  TEXT,
-        created_at  TIMESTAMPTZ DEFAULT NOW()
+        created_at  TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (tenant_id, dedupe_key)
     )
 
     facets (
@@ -187,10 +188,11 @@ class PostgresStorageAdapter:
                     content TEXT NOT NULL,
                     occurred_at TIMESTAMPTZ NOT NULL,
                     source_event_id TEXT,
-                    dedupe_key TEXT NOT NULL UNIQUE,
+                    dedupe_key TEXT NOT NULL,
                     metadata JSONB,
                     channel_id TEXT,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE (tenant_id, dedupe_key)
                 )
             """)
 
@@ -288,10 +290,13 @@ class PostgresStorageAdapter:
     # ── EvidenceStore ──────────────────────────────────────────────────────────
 
     async def insert(self, record: EvidenceRecord) -> InsertResult:
-        """Insert evidence record. Returns InsertResult with deduplicated=True if dedupe_key exists.
+        """Insert evidence. deduplicated=True means the key was already in THIS store.
 
-        On conflict (dedupe_key), returns existing id and deduplicated=True without modifying row.
-        embedding field is NOT stored in evidence table — caller routes to VectorStore separately.
+        On conflict (tenant_id, dedupe_key) it returns the existing id in the same store
+        and deduplicated=True without modifying the row. Scoping the dedupe key to the
+        store is deliberate: a globally unique key let one store's write collide with
+        another's and handed back the other store's row id (s4/REVIEW.md:20).
+        embedding is NOT stored in evidence; the caller routes it to VectorStore.
         """
         from agentmem.core.models import InsertResult
 
@@ -305,7 +310,7 @@ class PostgresStorageAdapter:
                 (tenant_id, event_type, content, occurred_at, source_event_id,
                  dedupe_key, metadata, channel_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (dedupe_key) DO NOTHING
+                ON CONFLICT (tenant_id, dedupe_key) DO NOTHING
                 RETURNING id
             """, (
                 record.tenant_id, record.event_type, record.content,
@@ -324,10 +329,10 @@ class PostgresStorageAdapter:
                     deduplicated=False,
                 )
 
-            # Conflict: fetch existing id
+            # Conflict: fetch this store's existing id, never another store's
             existing = await conn.execute(
-                "SELECT id FROM evidence WHERE dedupe_key = %s",
-                (record.dedupe_key,),
+                "SELECT id FROM evidence WHERE tenant_id = %s AND dedupe_key = %s",
+                (record.tenant_id, record.dedupe_key),
             )
             existing_row = await existing.fetchone()
             return InsertResult(
